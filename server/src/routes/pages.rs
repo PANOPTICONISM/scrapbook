@@ -154,6 +154,116 @@ pub async fn delete_page(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Permanently delete a page and all of its dependent records (blocks,
+/// database properties, rows, and property values if applicable). Writes
+/// tombstones so other clients can clean up on their next sync pull.
+///
+/// Sub-pages are NOT cascade-deleted — they are reparented to the deleted
+/// page's parent (or root) so the user doesn't lose data unintentionally.
+///
+/// This is called from the periodic cleanup task — there is no HTTP route
+/// for it. The lifecycle is: DELETE soft-deletes → 30 days → cleanup hard-deletes.
+pub async fn hard_delete_page(state: &Arc<AppState>, id: &str, now: i64) -> Result<()> {
+    let mut tx = state.db.begin().await?;
+
+    // Reparent any children of this page to its parent (or root) so we don't orphan them.
+    let row = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT parent_id FROM pages WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let grandparent_id: Option<String> = row.flatten();
+    sqlx::query("UPDATE pages SET parent_id = ?, updated_at = ? WHERE parent_id = ?")
+        .bind(&grandparent_id)
+        .bind(now)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+    // Collect dependent IDs BEFORE deleting so we can emit tombstones for them.
+    let block_ids: Vec<String> = sqlx::query_scalar("SELECT id FROM blocks WHERE page_id = ?")
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await?;
+
+    let property_ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM database_properties WHERE database_id = ?",
+    )
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let row_ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM database_rows WHERE database_id = ?",
+    )
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    // Each row also has associated property values.
+    let value_ids: Vec<String> = if row_ids.is_empty() {
+        Vec::new()
+    } else {
+        let placeholders = vec!["?"; row_ids.len()].join(",");
+        let q = format!(
+            "SELECT id FROM database_property_values WHERE row_id IN ({})",
+            placeholders
+        );
+        let mut query = sqlx::query_scalar(&q);
+        for r in &row_ids {
+            query = query.bind(r);
+        }
+        query.fetch_all(&mut *tx).await?
+    };
+
+    // Insert tombstones for everything (so other clients can clean up).
+    let mut tomb_inserts = vec![("page", id.to_string())];
+    tomb_inserts.extend(block_ids.iter().map(|i| ("block", i.clone())));
+    tomb_inserts.extend(property_ids.iter().map(|i| ("database_property", i.clone())));
+    tomb_inserts.extend(row_ids.iter().map(|i| ("database_row", i.clone())));
+    tomb_inserts.extend(value_ids.iter().map(|i| ("database_property_value", i.clone())));
+
+    for (entity_type, entity_id) in tomb_inserts {
+        sqlx::query(
+            "INSERT INTO tombstones (entity_type, entity_id, deleted_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT(entity_type, entity_id) DO UPDATE SET deleted_at = excluded.deleted_at",
+        )
+        .bind(entity_type)
+        .bind(entity_id)
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // Now hard-delete everything. FK constraints cascade some of this, but
+    // we do it explicitly so the order is clear.
+    sqlx::query("DELETE FROM database_property_values WHERE row_id IN (SELECT id FROM database_rows WHERE database_id = ?)")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM database_rows WHERE database_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM database_properties WHERE database_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM blocks WHERE page_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM pages WHERE id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(())
+}
+
 pub fn now_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

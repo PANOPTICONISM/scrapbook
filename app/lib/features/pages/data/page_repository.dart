@@ -142,6 +142,45 @@ class PageRepository {
     );
   }
 
+  /// Streams soft-deleted pages, most recently deleted first.
+  Stream<List<PageModel>> watchTrash() {
+    return (_db.select(_db.pagesTable)
+          ..where((p) => p.deletedAt.isNotNull())
+          ..orderBy([(p) => OrderingTerm.desc(p.deletedAt)]))
+        .watch()
+        .map((rows) => rows.map(_toModel).toList());
+  }
+
+  /// Restore a soft-deleted page (clear deleted_at). If its original parent is
+  /// also deleted or no longer exists, the page is restored to the root.
+  Future<void> restorePage(String id) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final page = await (_db.select(_db.pagesTable)..where((p) => p.id.equals(id)))
+        .getSingleOrNull();
+    if (page == null) return;
+
+    String? parentId = page.parentId;
+    if (parentId != null) {
+      final parent = await (_db.select(_db.pagesTable)
+            ..where((p) => p.id.equals(parentId!)))
+          .getSingleOrNull();
+      if (parent == null || parent.deletedAt != null) {
+        // Parent gone or also deleted — surface page at root
+        parentId = null;
+      }
+    }
+
+    await (_db.update(_db.pagesTable)..where((p) => p.id.equals(id))).write(
+      PagesTableCompanion(
+        parentId: Value(parentId),
+        deletedAt: const Value(null),
+        updatedAt: Value(now),
+        isDirty: const Value(true),
+      ),
+    );
+  }
+
+
   PageModel _toModel(PagesTableData row) => PageModel(
         id: row.id,
         parentId: row.parentId,

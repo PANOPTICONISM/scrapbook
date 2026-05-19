@@ -6,6 +6,13 @@ use super::{
     page::Page,
 };
 
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Tombstone {
+    pub entity_type: String,
+    pub entity_id: String,
+    pub deleted_at: i64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SyncPullResponse {
     pub server_time: i64,
@@ -14,6 +21,7 @@ pub struct SyncPullResponse {
     pub database_properties: Vec<DatabaseProperty>,
     pub database_rows: Vec<DatabaseRow>,
     pub database_property_values: Vec<DatabasePropertyValue>,
+    pub tombstones: Vec<Tombstone>,
 }
 
 #[derive(Debug, Deserialize)]

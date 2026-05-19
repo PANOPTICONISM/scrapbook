@@ -106,9 +106,48 @@ class SyncService {
       for (final v in (data['database_property_values'] as List? ?? [])) {
         await _applyPropertyValue(v as Map<String, dynamic>);
       }
+      // Apply tombstones LAST so any insertions above for the same id are
+      // immediately removed if a tombstone exists for them.
+      for (final t in (data['tombstones'] as List? ?? [])) {
+        await _applyTombstone(t as Map<String, dynamic>);
+      }
     });
 
     await _setLastSyncTime(serverTime);
+  }
+
+  Future<void> _applyTombstone(Map<String, dynamic> data) async {
+    final type = data['entity_type'] as String;
+    final id = data['entity_id'] as String;
+    switch (type) {
+      case 'page':
+        // Cascade: delete blocks, db rows, db property values for this page,
+        // and the page itself. Mirrors the server's hard delete.
+        await (_db.delete(_db.blocksTable)..where((b) => b.pageId.equals(id))).go();
+        final rowIds = await (_db.select(_db.databaseRowsTable)
+              ..where((r) => r.pageId.equals(id)))
+            .map((r) => r.id)
+            .get();
+        for (final rid in rowIds) {
+          await (_db.delete(_db.databasePropertyValuesTable)
+                ..where((v) => v.rowId.equals(rid)))
+              .go();
+        }
+        await (_db.delete(_db.databaseRowsTable)..where((r) => r.pageId.equals(id))).go();
+        await (_db.delete(_db.databasePropertiesTable)
+              ..where((p) => p.databaseId.equals(id)))
+            .go();
+        await (_db.delete(_db.pagesTable)..where((p) => p.id.equals(id))).go();
+      case 'block':
+        await (_db.delete(_db.blocksTable)..where((b) => b.id.equals(id))).go();
+      case 'database_property':
+        await (_db.delete(_db.databasePropertiesTable)..where((p) => p.id.equals(id))).go();
+      case 'database_row':
+        await (_db.delete(_db.databasePropertyValuesTable)..where((v) => v.rowId.equals(id))).go();
+        await (_db.delete(_db.databaseRowsTable)..where((r) => r.id.equals(id))).go();
+      case 'database_property_value':
+        await (_db.delete(_db.databasePropertyValuesTable)..where((v) => v.id.equals(id))).go();
+    }
   }
 
   Future<void> _applyPage(Map<String, dynamic> data) async {

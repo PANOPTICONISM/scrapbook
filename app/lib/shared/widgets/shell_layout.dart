@@ -125,7 +125,42 @@ class _SidebarState extends ConsumerState<_Sidebar> {
             error: (e, _) => Center(child: Text('Error: $e')),
           ),
         ),
+        const Divider(height: 1),
+        // Trash entry — always at the bottom
+        _TrashSidebarEntry(),
       ],
+    );
+  }
+}
+
+class _TrashSidebarEntry extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final repo = ref.watch(pageRepositoryProvider);
+    return StreamBuilder<List<PageModel>>(
+      stream: repo.watchTrash(),
+      builder: (context, snapshot) {
+        final count = snapshot.data?.length ?? 0;
+        return ListTile(
+          dense: true,
+          leading: const Padding(
+            padding: EdgeInsets.only(left: 6),
+            child: Icon(Icons.delete_outline, size: 18, color: Colors.grey),
+          ),
+          title: const Text('Trash', style: TextStyle(fontSize: 14)),
+          trailing: count > 0
+              ? Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text('$count', style: const TextStyle(fontSize: 11)),
+                )
+              : null,
+          onTap: () => context.go('/trash'),
+        );
+      },
     );
   }
 }

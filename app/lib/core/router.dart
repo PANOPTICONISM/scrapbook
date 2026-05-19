@@ -5,6 +5,7 @@ import '../features/databases/presentation/database_screen.dart';
 import '../features/pages/presentation/page_editor_screen.dart';
 import '../features/pages/presentation/page_list_screen.dart';
 import '../features/pages/presentation/setup_screen.dart';
+import '../features/pages/presentation/trash_screen.dart';
 import '../shared/widgets/shell_layout.dart';
 
 final router = GoRouter(
@@ -40,6 +41,10 @@ final router = GoRouter(
               ),
             ),
           ],
+        ),
+        GoRoute(
+          path: '/trash',
+          builder: (context, state) => const TrashScreen(),
         ),
       ],
     ),

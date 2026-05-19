@@ -13,6 +13,7 @@ use crate::{
     },
     AppState,
 };
+use crate::models::sync::Tombstone;
 
 use super::pages::now_millis;
 
@@ -63,6 +64,13 @@ pub async fn pull(
     .fetch_all(&state.db)
     .await?;
 
+    let tombstones = sqlx::query_as::<_, Tombstone>(
+        "SELECT entity_type, entity_id, deleted_at FROM tombstones WHERE deleted_at > ?",
+    )
+    .bind(since)
+    .fetch_all(&state.db)
+    .await?;
+
     Ok(Json(SyncPullResponse {
         server_time: now_millis(),
         pages,
@@ -70,6 +78,7 @@ pub async fn pull(
         database_properties,
         database_rows,
         database_property_values,
+        tombstones,
     }))
 }
 

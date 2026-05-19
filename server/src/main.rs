@@ -1,4 +1,5 @@
 mod auth;
+mod cleanup;
 mod config;
 mod error;
 mod models;
@@ -68,6 +69,9 @@ async fn main() -> anyhow::Result<()> {
         config: Arc::new(config.clone()),
         ws_tx,
     });
+
+    // Periodically hard-delete pages that have been in trash longer than the TTL.
+    cleanup::spawn(state.clone());
 
     let app = Router::new()
         // Pages
