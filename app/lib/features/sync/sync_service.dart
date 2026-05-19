@@ -61,7 +61,6 @@ class SyncService {
 
     final accepted = response.data['accepted'] as Map<String, dynamic>;
 
-    // Clear dirty flag on accepted records
     for (final id in (accepted['pages'] as List? ?? []).cast<String>()) {
       await (_db.update(_db.pagesTable)..where((p) => p.id.equals(id)))
           .write(const PagesTableCompanion(isDirty: Value(false), isNew: Value(false)));
@@ -121,8 +120,7 @@ class SyncService {
     final id = data['entity_id'] as String;
     switch (type) {
       case 'page':
-        // Cascade: delete blocks, db rows, db property values for this page,
-        // and the page itself. Mirrors the server's hard delete.
+        // Cascade matches the server's hard_delete_page.
         await (_db.delete(_db.blocksTable)..where((b) => b.pageId.equals(id))).go();
         final rowIds = await (_db.select(_db.databaseRowsTable)
               ..where((r) => r.pageId.equals(id)))

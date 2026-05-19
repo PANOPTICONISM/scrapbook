@@ -19,8 +19,6 @@ class DatabaseRepository {
 
   DatabaseRepository(this._db);
 
-  // --- Properties ---
-
   Stream<List<DatabaseProperty>> watchProperties(String databaseId) {
     return (_db.select(_db.databasePropertiesTable)
           ..where((p) => p.databaseId.equals(databaseId))
@@ -87,49 +85,56 @@ class DatabaseRepository {
     ));
   }
 
-  // --- Rows ---
-
   Stream<List<DatabaseRowModel>> watchRows(String databaseId) {
-    final rowsQuery = _db.select(_db.databaseRowsTable)
-      ..where((r) => r.databaseId.equals(databaseId))
-      ..where((r) => r.deletedAt.isNull())
-      ..orderBy([(r) => OrderingTerm.asc(r.position)]);
+    // Watch both tables so changes to a value (e.g. from sync) re-fire even
+    // when the row's updated_at didn't change.
+    return _db.customSelect(
+      'SELECT 1',
+      readsFrom: {_db.databaseRowsTable, _db.databasePropertyValuesTable},
+    ).watch().asyncMap((_) => _loadRows(databaseId));
+  }
 
-    return rowsQuery.watch().asyncMap((rows) async {
-      final result = <DatabaseRowModel>[];
-      for (final row in rows) {
-        final values = await (_db.select(_db.databasePropertyValuesTable)
-              ..where((v) => v.rowId.equals(row.id)))
-            .get();
+  Future<List<DatabaseRowModel>> _loadRows(String databaseId) async {
+    final rows = await (_db.select(_db.databaseRowsTable)
+          ..where((r) => r.databaseId.equals(databaseId))
+          ..where((r) => r.deletedAt.isNull())
+          ..orderBy([(r) => OrderingTerm.asc(r.position)]))
+        .get();
+    if (rows.isEmpty) return const <DatabaseRowModel>[];
 
-        final valueMap = <String, PropertyValue>{};
-        for (final v in values) {
-          if (v.valueText != null) {
-            valueMap[v.propertyId] = TextValue(v.valueText!);
-          } else if (v.valueNumber != null) {
-            valueMap[v.propertyId] = NumberValue(v.valueNumber!);
-          } else if (v.valueDate != null) {
-            valueMap[v.propertyId] =
-                DateValue(DateTime.fromMillisecondsSinceEpoch(v.valueDate!));
-          } else if (v.valueBool != null) {
-            valueMap[v.propertyId] = CheckboxValue(v.valueBool!);
-          } else if (v.valueSelect != null) {
-            valueMap[v.propertyId] = SelectValue(v.valueSelect!);
-          }
-        }
+    final rowIds = rows.map((r) => r.id).toList();
+    final allValues = await (_db.select(_db.databasePropertyValuesTable)
+          ..where((v) => v.rowId.isIn(rowIds)))
+        .get();
 
-        result.add(DatabaseRowModel(
-          id: row.id,
-          databaseId: row.databaseId,
-          pageId: row.pageId,
-          position: row.position,
-          createdAt: row.createdAt,
-          updatedAt: row.updatedAt,
-          values: valueMap,
-        ));
+    final valuesByRow = <String, Map<String, PropertyValue>>{};
+    for (final v in allValues) {
+      final m = valuesByRow.putIfAbsent(v.rowId, () => <String, PropertyValue>{});
+      if (v.valueText != null) {
+        m[v.propertyId] = TextValue(v.valueText!);
+      } else if (v.valueNumber != null) {
+        m[v.propertyId] = NumberValue(v.valueNumber!);
+      } else if (v.valueDate != null) {
+        m[v.propertyId] =
+            DateValue(DateTime.fromMillisecondsSinceEpoch(v.valueDate!));
+      } else if (v.valueBool != null) {
+        m[v.propertyId] = CheckboxValue(v.valueBool!);
+      } else if (v.valueSelect != null) {
+        m[v.propertyId] = SelectValue(v.valueSelect!);
       }
-      return result;
-    });
+    }
+
+    return rows
+        .map((row) => DatabaseRowModel(
+              id: row.id,
+              databaseId: row.databaseId,
+              pageId: row.pageId,
+              position: row.position,
+              createdAt: row.createdAt,
+              updatedAt: row.updatedAt,
+              values: valuesByRow[row.id] ?? const <String, PropertyValue>{},
+            ))
+        .toList();
   }
 
   Future<DatabaseRowModel> createRow(String databaseId) async {
@@ -138,7 +143,6 @@ class DatabaseRepository {
     final pageId = _uuid.v4();
     final pos = await _nextRowPosition(databaseId);
 
-    // Create linked page for the row
     await _db.into(_db.pagesTable).insert(PagesTableCompanion.insert(
           id: pageId,
           title: const Value(''),
@@ -181,8 +185,6 @@ class DatabaseRepository {
       isDirty: const Value(true),
     ));
   }
-
-  // --- Property Values ---
 
   Future<void> setValue({
     required String rowId,
@@ -228,7 +230,6 @@ class DatabaseRepository {
           ),
         );
 
-    // Mark the row as dirty too
     await (_db.update(_db.databaseRowsTable)..where((r) => r.id.equals(rowId)))
         .write(DatabaseRowsTableCompanion(
       updatedAt: Value(now),

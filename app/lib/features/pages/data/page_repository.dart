@@ -55,7 +55,6 @@ class PageRepository {
           isNew: const Value(true),
         ));
 
-    // Auto-create blank block for regular pages
     if (!isDatabase) {
       await _db.into(_db.blocksTable).insert(BlocksTableCompanion.insert(
             id: _uuid.v4(),
@@ -106,7 +105,6 @@ class PageRepository {
       newPosition = (siblings[clamped - 1].position + siblings[clamped].position) / 2;
     }
 
-    // Guard against making a page its own ancestor
     if (newParentId != null && await _isDescendant(newParentId, pageId)) {
       return;
     }

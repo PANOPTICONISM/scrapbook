@@ -20,9 +20,11 @@ class BlockEditor extends ConsumerStatefulWidget {
 class _BlockEditorState extends ConsumerState<BlockEditor> {
   final Map<String, FocusNode> _focusNodes = {};
   final Map<String, Timer> _saveTimers = {};
+  final Map<String, GlobalKey<BlockWidgetState>> _blockKeys = {};
 
   String? _activeSlashBlockId;
   String _slashQuery = '';
+  int _slashFocusedIndex = 0;
   LayerLink? _slashLink;
   Offset _slashLocalOffset = Offset.zero;
   bool _slashOpenAbove = false;
@@ -55,6 +57,24 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
     });
   }
 
+  /// Drop FocusNodes, pending timers, and block keys for blocks that no longer
+  /// exist — otherwise they'd accumulate for the lifetime of the page.
+  void _pruneState(List<BlockData> currentBlocks) {
+    final liveIds = currentBlocks.map((b) => b.id).toSet();
+    final stale = _focusNodes.keys.where((id) => !liveIds.contains(id)).toList();
+    for (final id in stale) {
+      _focusNodes.remove(id)?.dispose();
+      _saveTimers.remove(id)?.cancel();
+      _blockKeys.remove(id);
+    }
+  }
+
+  void _focusBlockAfterLayout(String id) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusFor(id).requestFocus();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final repo = ref.watch(blockRepositoryProvider);
@@ -66,8 +86,8 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
           return Center(child: Text('Error: ${snapshot.error}'));
         }
         final blocks = snapshot.data ?? const <BlockData>[];
+        _pruneState(blocks);
         if (blocks.isEmpty) {
-          // Ensure first block exists (only once)
           if (snapshot.connectionState == ConnectionState.active) {
             Future.microtask(() async {
               final current = await repo.getBlocks(widget.pageId);
@@ -85,7 +105,6 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
           itemCount: blocks.length,
           itemBuilder: (context, i) => _buildBlock(blocks, i),
           onReorder: (oldIndex, newIndex) async {
-            // ReorderableListView passes a newIndex that's incremented by 1 when moving down
             final movingBlock = blocks[oldIndex];
             final adjustedIndex = oldIndex < newIndex ? newIndex - 1 : newIndex;
             await repo.moveBlock(movingBlock.id, adjustedIndex, blocks);
@@ -100,10 +119,16 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
     final block = blocks[i];
     final repo = ref.read(blockRepositoryProvider);
 
+    final blockKey = _blockKeys.putIfAbsent(
+      block.id,
+      () => GlobalKey<BlockWidgetState>(),
+    );
+
     return _DraggableBlock(
       key: ValueKey(block.id),
       index: i,
       child: BlockWidget(
+        key: blockKey,
         type: block.type,
         content: block.content,
         todoChecked: block.todoChecked,
@@ -122,7 +147,7 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
         },
         onEnterPressed: () async {
           final next = i + 1 < blocks.length ? blocks[i + 1] : null;
-          // After lists, continue the list type
+          // Lists continue their type onto the next block; everything else falls back to paragraph.
           final newType = (block.type == BlockType.bulletedList ||
                   block.type == BlockType.numberedList ||
                   block.type == BlockType.todo)
@@ -135,44 +160,73 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
             beforePosition: next?.position,
           );
           ref.read(syncProvider.notifier).triggerDirtySync();
-          // Focus the new block on next frame
-          Future.delayed(const Duration(milliseconds: 50), () {
-            _focusFor(newId).requestFocus();
-          });
+          _focusBlockAfterLayout(newId);
         },
         onBackspaceEmpty: () async {
-          // If the block type isn't paragraph, convert to paragraph first
+          // Convert non-paragraph blocks back to paragraph before deleting.
           if (block.type != BlockType.paragraph) {
             await repo.updateBlock(block.id, type: BlockType.paragraph);
             ref.read(syncProvider.notifier).triggerDirtySync();
             return;
           }
-          // Otherwise delete the block and move focus to previous
-          if (blocks.length <= 1) return; // never delete last block
+          if (blocks.length <= 1) return;
           final prev = i > 0 ? blocks[i - 1] : null;
           await repo.deleteBlock(block.id);
           ref.read(syncProvider.notifier).triggerDirtySync();
-          if (prev != null) {
-            Future.delayed(const Duration(milliseconds: 50), () {
-              _focusFor(prev.id).requestFocus();
-            });
-          }
+          if (prev != null) _focusBlockAfterLayout(prev.id);
+        },
+        onArrowUpAtStart: () {
+          if (i > 0) _focusFor(blocks[i - 1].id).requestFocus();
+        },
+        onArrowDownAtEnd: () {
+          if (i + 1 < blocks.length) _focusFor(blocks[i + 1].id).requestFocus();
         },
         onSlashTyped: (text, link, localOffset) {
           _activeSlashBlockId = block.id;
           _slashQuery = '';
+          _slashFocusedIndex = 0;
           _slashLink = link;
           _slashLocalOffset = localOffset;
           _showSlashMenu(block.id);
         },
         onSlashQueryChanged: (query) {
           if (_activeSlashBlockId != block.id) return;
-          setState(() => _slashQuery = query);
+          setState(() {
+            _slashQuery = query;
+            _slashFocusedIndex = 0;
+          });
           _updateSlashMenu();
         },
         onSlashDismissed: () {
           if (_activeSlashBlockId != block.id) return;
           _hideSlashMenu();
+        },
+        onSlashMoveUp: () {
+          if (_activeSlashBlockId != block.id) return;
+          final opts = filterSlashOptions(_slashQuery);
+          if (opts.isEmpty) return;
+          setState(() {
+            _slashFocusedIndex =
+                (_slashFocusedIndex - 1 + opts.length) % opts.length;
+          });
+          _updateSlashMenu();
+        },
+        onSlashMoveDown: () {
+          if (_activeSlashBlockId != block.id) return;
+          final opts = filterSlashOptions(_slashQuery);
+          if (opts.isEmpty) return;
+          setState(() {
+            _slashFocusedIndex = (_slashFocusedIndex + 1) % opts.length;
+          });
+          _updateSlashMenu();
+        },
+        onSlashConfirm: () {
+          if (_activeSlashBlockId != block.id) return;
+          final opts = filterSlashOptions(_slashQuery);
+          if (opts.isEmpty) return;
+          final selected =
+              opts[_slashFocusedIndex.clamp(0, opts.length - 1)];
+          _applySlashSelection(block.id, selected);
         },
       ),
     );
@@ -184,14 +238,11 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
     final link = _slashLink;
     if (link == null) return;
 
-    // Decide whether to open the menu below the caret (preferred) or above
-    // it (when too close to the bottom of the screen).
+    // Flip the menu above the caret when there isn't enough room below it.
     _slashOpenAbove = false;
     final focusNode = _focusFor(blockId);
     final box = focusNode.context?.findRenderObject() as RenderBox?;
     if (box != null && box.hasSize) {
-      // `_slashLocalOffset.dy` is the position just below the caret line,
-      // relative to the TextField's top-left.
       final caretBottomGlobal = box.localToGlobal(Offset(0, _slashLocalOffset.dy)).dy;
       final screenHeight = MediaQuery.of(context).size.height;
       const buffer = 16.0;
@@ -200,13 +251,8 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
       }
     }
 
-    // For "open below": follower's top-left anchored at target top-left,
-    // offset so the menu starts right below the caret line.
-    // For "open above": follower's bottom-left anchored at target top-left,
-    // offset so the menu's bottom sits just above the caret line.
     final openAbove = _slashOpenAbove;
-    final lineHeight = _slashLocalOffset.dy; // = caret.dy + lineHeight (see BlockWidget)
-    final caretTopY = lineHeight - _approxLineHeight; // approximate top of caret line
+    final caretTopY = _slashLocalOffset.dy - _approxLineHeight;
     final followerOffset = openAbove
         ? Offset(_slashLocalOffset.dx, caretTopY - 4)
         : Offset(_slashLocalOffset.dx, _slashLocalOffset.dy + 4);
@@ -223,9 +269,15 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
           child: Material(
             color: Colors.transparent,
             child: SlashMenu(
-              query: _slashQuery,
+              options: filterSlashOptions(_slashQuery),
+              focusedIndex: _slashFocusedIndex,
               onSelect: (type) => _applySlashSelection(blockId, type),
-              onDismiss: _hideSlashMenu,
+              onHover: (i) {
+                if (_slashFocusedIndex != i) {
+                  setState(() => _slashFocusedIndex = i);
+                  _updateSlashMenu();
+                }
+              },
             ),
           ),
         ),
@@ -234,8 +286,6 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
     overlay.insert(_slashOverlay!);
   }
 
-  /// Approximate line-height used when deciding caret top for "open above"
-  /// positioning. Matches the default paragraph text style.
   static const double _approxLineHeight = 16 * 1.6;
 
   void _updateSlashMenu() {
@@ -249,23 +299,21 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
     _slashOverlay = null;
     _activeSlashBlockId = null;
     _slashQuery = '';
+    _slashFocusedIndex = 0;
     _slashLink = null;
     _slashLocalOffset = Offset.zero;
   }
 
   Future<void> _applySlashSelection(String blockId, BlockType type) async {
     _hideSlashMenu();
+    _blockKeys[blockId]?.currentState?.onSlashConfirmed();
     final repo = ref.read(blockRepositoryProvider);
-    // Clear the slash query text and set new type
     await repo.updateBlock(blockId, type: type, content: '');
     ref.read(syncProvider.notifier).triggerDirtySync();
-    Future.delayed(const Duration(milliseconds: 50), () {
-      _focusFor(blockId).requestFocus();
-    });
+    _focusFor(blockId).requestFocus();
   }
 }
 
-/// Wraps a block with a drag handle that appears on hover (left gutter).
 class _DraggableBlock extends StatefulWidget {
   final int index;
   final Widget child;
@@ -288,7 +336,6 @@ class _DraggableBlockState extends State<_DraggableBlock> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Drag handle gutter
             SizedBox(
               width: 24,
               child: AnimatedOpacity(

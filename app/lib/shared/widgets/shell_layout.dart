@@ -31,7 +31,6 @@ class ShellLayout extends ConsumerWidget {
       );
     }
 
-    // Mobile: use drawer
     return Scaffold(
       drawer: SizedBox(width: 280, child: Drawer(child: _Sidebar())),
       appBar: AppBar(title: const Text('Scrapbook'), centerTitle: false),
@@ -55,7 +54,6 @@ class _SidebarState extends ConsumerState<_Sidebar> {
 
     return Column(
       children: [
-        // Header
         Container(
           padding: const EdgeInsets.fromLTRB(16, 48, 16, 8),
           child: Row(
@@ -67,7 +65,6 @@ class _SidebarState extends ConsumerState<_Sidebar> {
             ],
           ),
         ),
-        // Search bar
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
           child: TextField(
@@ -85,7 +82,6 @@ class _SidebarState extends ConsumerState<_Sidebar> {
             style: const TextStyle(fontSize: 13),
           ),
         ),
-        // New page / database buttons
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           child: Row(
@@ -117,7 +113,6 @@ class _SidebarState extends ConsumerState<_Sidebar> {
           ),
         ),
         const Divider(height: 1),
-        // Page list
         Expanded(
           child: pages.when(
             data: (list) => _PageTree(pages: list, searchQuery: _searchQuery),
@@ -126,7 +121,6 @@ class _SidebarState extends ConsumerState<_Sidebar> {
           ),
         ),
         const Divider(height: 1),
-        // Trash entry — always at the bottom
         _TrashSidebarEntry(),
       ],
     );
@@ -172,7 +166,10 @@ class _PageTree extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // When searching, show flat filtered list (drag disabled in search mode)
+    final parentById = <String, String?>{
+      for (final p in pages) p.id: p.parentId,
+    };
+
     if (searchQuery.isNotEmpty) {
       final matches = pages
           .where((p) => p.title.toLowerCase().contains(searchQuery))
@@ -184,8 +181,12 @@ class _PageTree extends ConsumerWidget {
       }
       return ListView.builder(
         itemCount: matches.length,
-        itemBuilder: (context, i) =>
-            _PageTile(page: matches[i], allPages: const [], depth: 0),
+        itemBuilder: (context, i) => _PageTile(
+          page: matches[i],
+          allPages: const [],
+          parentById: parentById,
+          depth: 0,
+        ),
       );
     }
 
@@ -200,8 +201,12 @@ class _PageTree extends ConsumerWidget {
             child: Center(child: Text('No pages yet', style: TextStyle(color: Colors.grey))),
           )
         else
-          ...roots.map((p) => _PageTile(page: p, allPages: pages, depth: 0)),
-        // "Promote to root" drop zone — bottom of the tree
+          ...roots.map((p) => _PageTile(
+                page: p,
+                allPages: pages,
+                parentById: parentById,
+                depth: 0,
+              )),
         _RootDropZone(allPages: pages),
       ],
     );
@@ -230,7 +235,6 @@ class _RootDropZoneState extends ConsumerState<_RootDropZone> {
   @override
   Widget build(BuildContext context) {
     return DragTarget<String>(
-      // Reject pages that are already top-level — nothing to do.
       onWillAcceptWithDetails: (details) => !_isAlreadyRoot(details.data),
       onMove: (_) {
         if (!_hover) setState(() => _hover = true);
@@ -252,8 +256,6 @@ class _RootDropZoneState extends ConsumerState<_RootDropZone> {
         ref.read(syncProvider.notifier).triggerDirtySync();
       },
       builder: (context, candidate, _) {
-        // candidate contains only items that passed onWillAccept, so this is
-        // naturally empty when the dragged page is already top-level.
         final highlighted = _hover && candidate.isNotEmpty;
         return Container(
           height: 40,
@@ -283,9 +285,15 @@ class _RootDropZoneState extends ConsumerState<_RootDropZone> {
 class _PageTile extends ConsumerStatefulWidget {
   final PageModel page;
   final List<PageModel> allPages;
+  final Map<String, String?> parentById;
   final int depth;
 
-  const _PageTile({required this.page, required this.allPages, required this.depth});
+  const _PageTile({
+    required this.page,
+    required this.allPages,
+    required this.parentById,
+    required this.depth,
+  });
 
   @override
   ConsumerState<_PageTile> createState() => _PageTileState();
@@ -351,16 +359,28 @@ class _PageTileState extends ConsumerState<_PageTile> {
             ),
           ),
         ),
-        ...children.map((child) =>
-            _PageTile(page: child, allPages: widget.allPages, depth: widget.depth + 1)),
+        ...children.map((child) => _PageTile(
+              page: child,
+              allPages: widget.allPages,
+              parentById: widget.parentById,
+              depth: widget.depth + 1,
+            )),
       ],
     );
 
-    // Dim entire subtree when this page (or any ancestor) is being dragged
+    // Precompute the ancestry chain so the drag-listener can decide whether
+    // to dim this subtree in O(1) on every drag-tick rebuild.
+    final ancestry = <String>{widget.page.id};
+    String? cursor = widget.parentById[widget.page.id];
+    while (cursor != null) {
+      ancestry.add(cursor);
+      cursor = widget.parentById[cursor];
+    }
+
     return ValueListenableBuilder<String?>(
       valueListenable: _draggingPageId,
       builder: (context, draggingId, child) {
-        final dim = draggingId != null && _isInDraggingSubtree(draggingId);
+        final dim = draggingId != null && ancestry.contains(draggingId);
         return IgnorePointer(
           ignoring: dim,
           child: Opacity(opacity: dim ? 0.4 : 1.0, child: child),
@@ -368,17 +388,6 @@ class _PageTileState extends ConsumerState<_PageTile> {
       },
       child: subtree,
     );
-  }
-
-  /// True if this tile's page is the dragging page itself, or a descendant of it.
-  bool _isInDraggingSubtree(String draggingId) {
-    String? current = widget.page.id;
-    while (current != null) {
-      if (current == draggingId) return true;
-      final ancestor = widget.allPages.where((p) => p.id == current).firstOrNull;
-      current = ancestor?.parentId;
-    }
-    return false;
   }
 
   Widget _buildTile(PageModel page, String route, {required Widget dragHandle}) {
@@ -390,7 +399,6 @@ class _PageTileState extends ConsumerState<_PageTile> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Drag handle gutter — only visible on hover
             SizedBox(
               width: 18,
               child: AnimatedOpacity(
@@ -438,18 +446,15 @@ class _PageTileState extends ConsumerState<_PageTile> {
 
   Widget _wrapAsDropTarget(Widget child) {
     return DragTarget<String>(
-      onWillAcceptWithDetails: (details) {
-        // Can't drop onto self
-        return details.data != widget.page.id;
-      },
+      onWillAcceptWithDetails: (details) => details.data != widget.page.id,
       onMove: (details) {
         final box = _dropTargetKey.currentContext?.findRenderObject() as RenderBox?;
         if (box == null) return;
         final local = box.globalToLocal(details.offset);
         final h = box.size.height;
-        // When dragging a child onto its own parent, only trigger un-nest
-        // (before/after) on a narrow edge band — middle of tile is no-op.
-        // Otherwise use the standard 25%/50%/25% zones.
+        // When dragging a child onto its own parent, only trigger un-nest on a
+        // 4px edge band — middle of the tile stays a no-op so it doesn't escape
+        // by accident. Otherwise use the standard 25%/50%/25% zones.
         final isOwnChild = _draggedIsOwnChild(details.data);
         final edgePx = isOwnChild ? 4.0 : h * 0.25;
         _DropZone zone;
@@ -471,7 +476,7 @@ class _PageTileState extends ConsumerState<_PageTile> {
       builder: (context, candidate, rejected) {
         final color = Theme.of(context).colorScheme.primary;
         final showInside = _hoverZone == _DropZone.inside && candidate.isNotEmpty;
-        // Use Material instead of ColoredBox so InkWell splashes remain visible
+        // Material (not ColoredBox) so the underlying ListTile splashes show through.
         final tile = Material(
           color: showInside ? color.withValues(alpha: 0.10) : Colors.transparent,
           child: child,
@@ -479,14 +484,12 @@ class _PageTileState extends ConsumerState<_PageTile> {
         return Column(
           key: _dropTargetKey,
           children: [
-            // Before-indicator
             Container(
               height: 2,
               color: (_hoverZone == _DropZone.before && candidate.isNotEmpty) ? color : Colors.transparent,
               margin: EdgeInsets.only(left: 16.0 + widget.depth * 16, right: 16),
             ),
             tile,
-            // After-indicator
             Container(
               height: 2,
               color: (_hoverZone == _DropZone.after && candidate.isNotEmpty) ? color : Colors.transparent,
@@ -506,9 +509,7 @@ class _PageTileState extends ConsumerState<_PageTile> {
     int newIndex;
 
     if (zone == _DropZone.inside) {
-      // If it's already a child of this page, dropping inside is a no-op.
       if (_draggedIsOwnChild(draggedId)) return;
-      // Make it the last child of this page
       newParentId = widget.page.id;
       final siblings = allPages
           .where((p) => p.parentId == newParentId && p.id != draggedId)
@@ -522,7 +523,6 @@ class _PageTileState extends ConsumerState<_PageTile> {
         siblings: siblings,
       );
     } else {
-      // Insert as sibling of this page (before or after)
       newParentId = widget.page.parentId;
       final siblings = allPages
           .where((p) => p.parentId == newParentId && p.id != draggedId)

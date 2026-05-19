@@ -73,7 +73,6 @@ pub async fn create_page(
     .execute(&state.db)
     .await?;
 
-    // Auto-create a blank markdown block for regular (non-database) pages
     if !req.is_database.unwrap_or(false) {
         let block_id = uuid::Uuid::new_v4().to_string();
         sqlx::query(
@@ -201,7 +200,6 @@ pub async fn hard_delete_page(state: &Arc<AppState>, id: &str, now: i64) -> Resu
     .fetch_all(&mut *tx)
     .await?;
 
-    // Each row also has associated property values.
     let value_ids: Vec<String> = if row_ids.is_empty() {
         Vec::new()
     } else {
@@ -217,7 +215,6 @@ pub async fn hard_delete_page(state: &Arc<AppState>, id: &str, now: i64) -> Resu
         query.fetch_all(&mut *tx).await?
     };
 
-    // Insert tombstones for everything (so other clients can clean up).
     let mut tomb_inserts = vec![("page", id.to_string())];
     tomb_inserts.extend(block_ids.iter().map(|i| ("block", i.clone())));
     tomb_inserts.extend(property_ids.iter().map(|i| ("database_property", i.clone())));
@@ -237,8 +234,6 @@ pub async fn hard_delete_page(state: &Arc<AppState>, id: &str, now: i64) -> Resu
         .await?;
     }
 
-    // Now hard-delete everything. FK constraints cascade some of this, but
-    // we do it explicitly so the order is clear.
     sqlx::query("DELETE FROM database_property_values WHERE row_id IN (SELECT id FROM database_rows WHERE database_id = ?)")
         .bind(id)
         .execute(&mut *tx)

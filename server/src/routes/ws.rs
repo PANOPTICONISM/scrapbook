@@ -27,23 +27,20 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
     loop {
         tokio::select! {
-            // Broadcast message from server (change notification)
             Ok(msg) = rx.recv() => {
                 if sender.send(Message::Text(msg.into())).await.is_err() {
                     break;
                 }
             }
-            // Ping keepalive
             _ = ping_interval.tick() => {
                 let ping = r#"{"type":"ping"}"#;
                 if sender.send(Message::Text(ping.into())).await.is_err() {
                     break;
                 }
             }
-            // Incoming message from client (pong only)
             msg = receiver.next() => {
                 match msg {
-                    Some(Ok(Message::Text(_))) => { /* pong received, do nothing */ }
+                    Some(Ok(Message::Text(_))) => {}
                     Some(Ok(Message::Close(_))) | None => break,
                     _ => {}
                 }

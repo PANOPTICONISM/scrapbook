@@ -15,6 +15,8 @@ class BlockWidget extends StatefulWidget {
   final void Function(bool) onTodoCheckedChanged;
   final VoidCallback onEnterPressed;
   final VoidCallback onBackspaceEmpty;
+  final VoidCallback onArrowUpAtStart;
+  final VoidCallback onArrowDownAtEnd;
   /// Called once when `/` is typed. The [link] tracks the TextField's screen
   /// position; the [localCaretOffset] is the position of the caret inside the
   /// TextField (TextField-local coordinates).
@@ -22,6 +24,9 @@ class BlockWidget extends StatefulWidget {
       onSlashTyped;
   final void Function(String text) onSlashQueryChanged;
   final VoidCallback onSlashDismissed;
+  final VoidCallback onSlashMoveUp;
+  final VoidCallback onSlashMoveDown;
+  final VoidCallback onSlashConfirm;
 
   const BlockWidget({
     super.key,
@@ -35,9 +40,14 @@ class BlockWidget extends StatefulWidget {
     required this.onTodoCheckedChanged,
     required this.onEnterPressed,
     required this.onBackspaceEmpty,
+    required this.onArrowUpAtStart,
+    required this.onArrowDownAtEnd,
     required this.onSlashTyped,
     required this.onSlashQueryChanged,
     required this.onSlashDismissed,
+    required this.onSlashMoveUp,
+    required this.onSlashMoveDown,
+    required this.onSlashConfirm,
   });
 
   @override
@@ -50,6 +60,14 @@ class BlockWidgetState extends State<BlockWidget> {
   final LayerLink _fieldLink = LayerLink();
   bool _slashActive = false;
   int _slashStart = -1;
+
+  /// Called by the parent after a slash selection is applied. Clears the slash
+  /// query text from the field and resets the internal slash-tracking state.
+  void onSlashConfirmed() {
+    _slashActive = false;
+    _slashStart = -1;
+    _controller.text = '';
+  }
 
   @override
   void initState() {
@@ -70,7 +88,6 @@ class BlockWidgetState extends State<BlockWidget> {
       oldWidget.focusNode?.removeListener(_onFocusChanged);
       widget.focusNode?.addListener(_onFocusChanged);
     }
-    // Sync external content changes (e.g., type changed externally)
     if (widget.content != _controller.text && !_isFocused()) {
       _controller.text = widget.content;
     }
@@ -99,7 +116,6 @@ class BlockWidgetState extends State<BlockWidget> {
       Rect.zero,
     );
 
-    // Position the menu just below the line the caret is on.
     final lineHeight = (style.fontSize ?? 16) * (style.height ?? 1.4);
     return Offset(caretLocal.dx, caretLocal.dy + lineHeight);
   }
@@ -108,7 +124,6 @@ class BlockWidgetState extends State<BlockWidget> {
     final text = _controller.text;
     final caret = _controller.selection.baseOffset;
 
-    // Slash menu detection
     if (!_slashActive && caret > 0 && text[caret - 1] == '/') {
       _slashStart = caret - 1;
       _slashActive = true;
@@ -130,7 +145,6 @@ class BlockWidgetState extends State<BlockWidget> {
       }
     }
 
-    // Markdown shortcuts at start of empty/short block
     _checkMarkdownShortcuts(text);
 
     widget.onContentChanged(text);
@@ -180,9 +194,31 @@ class BlockWidgetState extends State<BlockWidget> {
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
 
+    // While the slash menu is open, arrow keys and Enter drive the menu.
+    if (_slashActive) {
+      if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+        widget.onSlashMoveUp();
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+        widget.onSlashMoveDown();
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.enter) {
+        widget.onSlashConfirm();
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.escape) {
+        _slashActive = false;
+        _slashStart = -1;
+        widget.onSlashDismissed();
+        return KeyEventResult.handled;
+      }
+    }
+
+    // Enter creates a new block, except in code blocks where it inserts a newline.
     if (event.logicalKey == LogicalKeyboardKey.enter &&
         !HardwareKeyboard.instance.isShiftPressed) {
-      // For paragraph in code/quote blocks, allow shift+enter for newline inside
       if (widget.type != BlockType.code) {
         widget.onEnterPressed();
         return KeyEventResult.handled;
@@ -195,7 +231,66 @@ class BlockWidgetState extends State<BlockWidget> {
       return KeyEventResult.handled;
     }
 
+    // Arrow keys hop blocks when the caret is on the first/last visual line
+    // (computed via TextPainter so wrapped paragraphs still scroll within).
+    final selection = _controller.selection;
+    final isCollapsed = selection.isCollapsed;
+    if (isCollapsed) {
+      final isUp = event.logicalKey == LogicalKeyboardKey.arrowUp;
+      final isDown = event.logicalKey == LogicalKeyboardKey.arrowDown;
+      if (isUp && _caretIsOnFirstVisualLine()) {
+        widget.onArrowUpAtStart();
+        return KeyEventResult.handled;
+      }
+      if (isDown && _caretIsOnLastVisualLine()) {
+        widget.onArrowDownAtEnd();
+        return KeyEventResult.handled;
+      }
+    }
+
     return KeyEventResult.ignored;
+  }
+
+  bool _caretIsOnFirstVisualLine() {
+    final m = _measureCaret();
+    if (m == null) return true;
+    final (caretY, firstLineHeight, _) = m;
+    return caretY < firstLineHeight;
+  }
+
+  bool _caretIsOnLastVisualLine() {
+    final m = _measureCaret();
+    if (m == null) return true;
+    final (caretY, _, lastLineTop) = m;
+    return caretY >= lastLineTop;
+  }
+
+  /// Returns (caretY, firstLineHeight, lastLineTop) for the current selection,
+  /// in TextField-local coordinates, or null if layout isn't ready.
+  (double, double, double)? _measureCaret() {
+    final ctx = _fieldKey.currentContext;
+    final box = ctx?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return null;
+
+    final text = _controller.text;
+    if (text.isEmpty) return (0, double.infinity, 0);
+
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: _textStyle(context)),
+      textDirection: TextDirection.ltr,
+      maxLines: null,
+    )..layout(maxWidth: box.size.width);
+
+    final caretOffset = tp.getOffsetForCaret(
+      TextPosition(offset: _controller.selection.baseOffset.clamp(0, text.length)),
+      Rect.zero,
+    );
+
+    final lines = tp.computeLineMetrics();
+    if (lines.isEmpty) return null;
+    final firstLineHeight = lines.first.height;
+    final lastLineTop = lines.last.baseline - lines.last.ascent;
+    return (caretOffset.dy, firstLineHeight, lastLineTop);
   }
 
   @override
@@ -243,7 +338,8 @@ class BlockWidgetState extends State<BlockWidget> {
   }
 
   Widget _wrapBlock(BuildContext context, Widget child) {
-    final padding = const EdgeInsets.symmetric(vertical: 3);
+    const padding = EdgeInsets.symmetric(vertical: 3);
+    final markerColor = Theme.of(context).colorScheme.onSurface;
 
     return switch (widget.type) {
       BlockType.heading1 ||
@@ -258,7 +354,11 @@ class BlockWidgetState extends State<BlockWidget> {
             children: [
               Padding(
                 padding: const EdgeInsets.only(top: 8, right: 10, left: 4),
-                child: Container(width: 5, height: 5, decoration: const BoxDecoration(shape: BoxShape.circle, color: Colors.black87)),
+                child: Container(
+                  width: 5,
+                  height: 5,
+                  decoration: BoxDecoration(shape: BoxShape.circle, color: markerColor),
+                ),
               ),
               Expanded(child: child),
             ],
@@ -269,9 +369,9 @@ class BlockWidgetState extends State<BlockWidget> {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Padding(
-                padding: EdgeInsets.only(top: 0, right: 8, left: 0),
-                child: Text('1.', style: TextStyle(fontSize: 16, height: 1.6)),
+              Padding(
+                padding: const EdgeInsets.only(top: 0, right: 8, left: 0),
+                child: Text('1.', style: TextStyle(fontSize: 16, height: 1.6, color: markerColor)),
               ),
               Expanded(child: child),
             ],
@@ -319,15 +419,16 @@ class BlockWidgetState extends State<BlockWidget> {
   }
 
   TextStyle _textStyle(BuildContext context) {
-    final base = const TextStyle(fontSize: 16, height: 1.6);
+    const base = TextStyle(fontSize: 16, height: 1.6);
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
     return switch (widget.type) {
       BlockType.heading1 => base.copyWith(fontSize: 30, fontWeight: FontWeight.bold, height: 1.3),
       BlockType.heading2 => base.copyWith(fontSize: 24, fontWeight: FontWeight.w600, height: 1.35),
       BlockType.heading3 => base.copyWith(fontSize: 20, fontWeight: FontWeight.w600, height: 1.4),
-      BlockType.quote => base.copyWith(fontStyle: FontStyle.italic, color: Colors.grey.shade700),
+      BlockType.quote => base.copyWith(fontStyle: FontStyle.italic, color: muted),
       BlockType.code => base.copyWith(fontFamily: 'Menlo', fontSize: 14),
       BlockType.todo => widget.todoChecked
-          ? base.copyWith(decoration: TextDecoration.lineThrough, color: Colors.grey)
+          ? base.copyWith(decoration: TextDecoration.lineThrough, color: muted)
           : base,
       _ => base,
     };

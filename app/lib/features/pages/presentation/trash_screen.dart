@@ -24,7 +24,6 @@ class TrashScreen extends ConsumerWidget {
       ),
       body: Column(
         children: [
-          // Banner explaining the auto-cleanup policy
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),

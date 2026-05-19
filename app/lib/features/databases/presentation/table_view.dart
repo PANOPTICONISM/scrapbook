@@ -25,12 +25,11 @@ class TableView extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return Column(
       children: [
-        // Header row
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: Row(
             children: [
-              const SizedBox(width: 40), // row open button column
+              const SizedBox(width: 40),
               ...properties.map((p) => _HeaderCell(
                     property: p,
                     onRename: (name) => ref
@@ -40,7 +39,6 @@ class TableView extends ConsumerWidget {
                         .read(databaseRepositoryProvider)
                         .deleteProperty(p.id),
                   )),
-              // Add property button
               TextButton.icon(
                 onPressed: () => _showAddPropertyDialog(context, ref),
                 icon: const Icon(Icons.add, size: 16),
@@ -50,7 +48,6 @@ class TableView extends ConsumerWidget {
           ),
         ),
         const Divider(height: 1),
-        // Data rows
         Expanded(
           child: ListView.separated(
             itemCount: rows.length + 1,
@@ -71,7 +68,6 @@ class TableView extends ConsumerWidget {
                 scrollDirection: Axis.horizontal,
                 child: Row(
                   children: [
-                    // Open page button
                     SizedBox(
                       width: 40,
                       child: IconButton(
@@ -311,6 +307,7 @@ class _TextCell extends StatefulWidget {
 
 class _TextCellState extends State<_TextCell> {
   late final TextEditingController _ctrl;
+  final FocusNode _focus = FocusNode();
 
   @override
   void initState() {
@@ -319,14 +316,25 @@ class _TextCellState extends State<_TextCell> {
   }
 
   @override
+  void didUpdateWidget(_TextCell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Update from external (e.g. sync), unless the user is currently editing.
+    if (widget.value != _ctrl.text && !_focus.hasFocus) {
+      _ctrl.text = widget.value;
+    }
+  }
+
+  @override
   void dispose() {
     _ctrl.dispose();
+    _focus.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) => TextField(
         controller: _ctrl,
+        focusNode: _focus,
         onSubmitted: widget.onChanged,
         onTapOutside: (_) => widget.onChanged(_ctrl.text),
         decoration: const InputDecoration(isDense: true, border: InputBorder.none),
@@ -345,27 +353,38 @@ class _NumberCell extends StatefulWidget {
 
 class _NumberCellState extends State<_NumberCell> {
   late final TextEditingController _ctrl;
+  final FocusNode _focus = FocusNode();
+
+  static String _format(double? v) => v == null
+      ? ''
+      : (v.truncateToDouble() == v ? v.toInt().toString() : v.toString());
 
   @override
   void initState() {
     super.initState();
-    _ctrl = TextEditingController(
-        text: widget.value != null
-            ? (widget.value!.truncateToDouble() == widget.value
-                ? widget.value!.toInt().toString()
-                : widget.value.toString())
-            : '');
+    _ctrl = TextEditingController(text: _format(widget.value));
+  }
+
+  @override
+  void didUpdateWidget(_NumberCell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final formatted = _format(widget.value);
+    if (formatted != _ctrl.text && !_focus.hasFocus) {
+      _ctrl.text = formatted;
+    }
   }
 
   @override
   void dispose() {
     _ctrl.dispose();
+    _focus.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) => TextField(
         controller: _ctrl,
+        focusNode: _focus,
         keyboardType: TextInputType.number,
         onSubmitted: (v) => widget.onChanged(double.tryParse(v)),
         onTapOutside: (_) => widget.onChanged(double.tryParse(_ctrl.text)),

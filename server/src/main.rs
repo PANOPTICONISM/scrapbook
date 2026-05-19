@@ -52,7 +52,8 @@ async fn main() -> anyhow::Result<()> {
 
     let opts = SqliteConnectOptions::from_str(&config.database_url)?
         .create_if_missing(true)
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .foreign_keys(true);
 
     let db = SqlitePoolOptions::new()
         .max_connections(5)
@@ -70,28 +71,20 @@ async fn main() -> anyhow::Result<()> {
         ws_tx,
     });
 
-    // Periodically hard-delete pages that have been in trash longer than the TTL.
     cleanup::spawn(state.clone());
 
     let app = Router::new()
-        // Pages
-        .route("/api/pages",     get(pages::list_pages).post(pages::create_page))
+        .route("/api/pages", get(pages::list_pages).post(pages::create_page))
         .route("/api/pages/{id}", get(pages::get_page).patch(pages::update_page).delete(pages::delete_page))
-        // Blocks
         .route("/api/pages/{page_id}/blocks", get(blocks::list_blocks))
-        .route("/api/blocks",    post(blocks::create_block))
+        .route("/api/blocks", post(blocks::create_block))
         .route("/api/blocks/{id}", patch(blocks::update_block).delete(blocks::delete_block))
-        // Databases — properties
-        .route("/api/databases/{id}/properties",          get(databases::list_properties).post(databases::create_property))
+        .route("/api/databases/{id}/properties", get(databases::list_properties).post(databases::create_property))
         .route("/api/databases/{id}/properties/{prop_id}", patch(databases::update_property).delete(databases::delete_property))
-        // Databases — rows
-        .route("/api/databases/{id}/rows",         get(databases::list_rows).post(databases::create_row))
+        .route("/api/databases/{id}/rows", get(databases::list_rows).post(databases::create_row))
         .route("/api/databases/{id}/rows/{row_id}", delete(databases::delete_row))
-        // Databases — values
         .route("/api/rows/{row_id}/values", get(databases::list_values).post(databases::upsert_value))
-        // Sync
         .route("/api/sync", get(sync::pull).post(sync::push))
-        // WebSocket
         .route("/api/ws", get(ws::ws_handler))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())

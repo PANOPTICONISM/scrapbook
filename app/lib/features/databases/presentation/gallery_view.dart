@@ -25,9 +25,7 @@ class GalleryView extends StatelessWidget {
       );
     }
 
-    // Name property is the first text property or just the first property
     final nameProperty = properties.firstOrNull;
-    // Non-name properties to show as chips (up to 3)
     final chipProperties = properties.skip(1).take(3).toList();
 
     final crossAxisCount = MediaQuery.of(context).size.width > 900 ? 4 :

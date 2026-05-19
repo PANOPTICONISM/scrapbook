@@ -15,7 +15,6 @@ use crate::{
 
 use super::pages::now_millis;
 
-// --- Properties ---
 
 pub async fn list_properties(
     _auth: AuthToken,
@@ -115,7 +114,6 @@ pub async fn delete_property(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// --- Rows ---
 
 pub async fn list_rows(
     _auth: AuthToken,
@@ -147,7 +145,6 @@ pub async fn create_row(
 ) -> Result<(StatusCode, Json<Value>)> {
     let position = req.position.unwrap_or(1.0);
 
-    // Create the linked page for this row
     let page_id = &req.page_id;
     sqlx::query(
         "INSERT INTO pages (id, title, is_database, position, created_at, updated_at)
@@ -198,7 +195,6 @@ pub async fn delete_row(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// --- Property Values ---
 
 pub async fn list_values(
     _auth: AuthToken,

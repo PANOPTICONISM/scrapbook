@@ -19,13 +19,11 @@ pub const CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60); // 24 
 
 pub fn spawn(state: Arc<AppState>) {
     tokio::spawn(async move {
-        // Run once on startup so server restarts always catch up.
         if let Err(e) = run_once(&state).await {
             tracing::warn!("trash cleanup failed at startup: {e}");
         }
 
         let mut ticker = interval(CLEANUP_INTERVAL);
-        // Skip the immediate first tick — we just ran.
         ticker.tick().await;
         loop {
             ticker.tick().await;

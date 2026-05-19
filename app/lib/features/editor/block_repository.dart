@@ -72,7 +72,6 @@ class BlockRepository {
     } else if (beforePosition != null) {
       position = beforePosition - 1.0;
     } else {
-      // Append at end
       final last = await (_db.select(_db.blocksTable)
             ..where((b) => b.pageId.equals(pageId))
             ..where((b) => b.deletedAt.isNull())
@@ -133,7 +132,6 @@ class BlockRepository {
     int newIndex,
     List<BlockData> orderedBlocks,
   ) async {
-    // Compute the new fractional position based on neighbors
     final others = orderedBlocks.where((b) => b.id != movingBlockId).toList();
     final clampedIndex = newIndex.clamp(0, others.length);
 
