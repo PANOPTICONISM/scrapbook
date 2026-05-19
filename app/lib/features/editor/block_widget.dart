@@ -15,7 +15,11 @@ class BlockWidget extends StatefulWidget {
   final void Function(bool) onTodoCheckedChanged;
   final VoidCallback onEnterPressed;
   final VoidCallback onBackspaceEmpty;
-  final void Function(String text, Offset caretPosition) onSlashTyped;
+  /// Called once when `/` is typed. The [link] tracks the TextField's screen
+  /// position; the [localCaretOffset] is the position of the caret inside the
+  /// TextField (TextField-local coordinates).
+  final void Function(String text, LayerLink link, Offset localCaretOffset)
+      onSlashTyped;
   final void Function(String text) onSlashQueryChanged;
   final VoidCallback onSlashDismissed;
 
@@ -42,6 +46,8 @@ class BlockWidget extends StatefulWidget {
 
 class BlockWidgetState extends State<BlockWidget> {
   late TextEditingController _controller;
+  final GlobalKey _fieldKey = GlobalKey();
+  final LayerLink _fieldLink = LayerLink();
   bool _slashActive = false;
   int _slashStart = -1;
 
@@ -50,11 +56,20 @@ class BlockWidgetState extends State<BlockWidget> {
     super.initState();
     _controller = TextEditingController(text: widget.content);
     _controller.addListener(_onTextChanged);
+    widget.focusNode?.addListener(_onFocusChanged);
+  }
+
+  void _onFocusChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void didUpdateWidget(BlockWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.focusNode != widget.focusNode) {
+      oldWidget.focusNode?.removeListener(_onFocusChanged);
+      widget.focusNode?.addListener(_onFocusChanged);
+    }
     // Sync external content changes (e.g., type changed externally)
     if (widget.content != _controller.text && !_isFocused()) {
       _controller.text = widget.content;
@@ -62,6 +77,32 @@ class BlockWidgetState extends State<BlockWidget> {
   }
 
   bool _isFocused() => widget.focusNode?.hasFocus ?? false;
+
+  /// Compute the caret's offset *inside* the TextField (local coordinates).
+  /// Used together with a LayerLink so the slash menu can anchor to the caret
+  /// regardless of where the TextField sits on screen.
+  Offset _caretLocalOffset(String text, int slashIndex) {
+    final ctx = _fieldKey.currentContext;
+    if (ctx == null) return Offset.zero;
+    final renderBox = ctx.findRenderObject() as RenderBox?;
+    if (renderBox == null || !renderBox.hasSize) return Offset.zero;
+
+    final style = _textStyle(context);
+    final tp = TextPainter(
+      text: TextSpan(text: text.substring(0, slashIndex + 1), style: style),
+      textDirection: TextDirection.ltr,
+      maxLines: null,
+    )..layout(maxWidth: renderBox.size.width);
+
+    final caretLocal = tp.getOffsetForCaret(
+      TextPosition(offset: slashIndex + 1),
+      Rect.zero,
+    );
+
+    // Position the menu just below the line the caret is on.
+    final lineHeight = (style.fontSize ?? 16) * (style.height ?? 1.4);
+    return Offset(caretLocal.dx, caretLocal.dy + lineHeight);
+  }
 
   void _onTextChanged() {
     final text = _controller.text;
@@ -71,7 +112,7 @@ class BlockWidgetState extends State<BlockWidget> {
     if (!_slashActive && caret > 0 && text[caret - 1] == '/') {
       _slashStart = caret - 1;
       _slashActive = true;
-      widget.onSlashTyped(text, Offset.zero);
+      widget.onSlashTyped(text, _fieldLink, _caretLocalOffset(text, _slashStart));
     } else if (_slashActive) {
       if (caret <= _slashStart) {
         _slashActive = false;
@@ -159,6 +200,7 @@ class BlockWidgetState extends State<BlockWidget> {
 
   @override
   void dispose() {
+    widget.focusNode?.removeListener(_onFocusChanged);
     _controller.removeListener(_onTextChanged);
     _controller.dispose();
     super.dispose();
@@ -173,19 +215,25 @@ class BlockWidgetState extends State<BlockWidget> {
       );
     }
 
-    final field = TextField(
-      controller: _controller,
-      focusNode: widget.focusNode,
-      autofocus: widget.autofocus,
-      maxLines: null,
-      minLines: 1,
-      style: _textStyle(context),
-      decoration: InputDecoration(
-        hintText: widget.type.hint,
-        hintStyle: TextStyle(color: Colors.grey.shade400),
-        border: InputBorder.none,
-        isDense: true,
-        contentPadding: EdgeInsets.zero,
+    final field = CompositedTransformTarget(
+      link: _fieldLink,
+      child: TextField(
+        key: _fieldKey,
+        controller: _controller,
+        focusNode: widget.focusNode,
+        autofocus: widget.autofocus,
+        maxLines: null,
+        minLines: 1,
+        style: _textStyle(context),
+        decoration: InputDecoration(
+          // Only show the hint on the focused line — otherwise every empty
+          // block would advertise "Type '/' for commands".
+          hintText: _isFocused() ? widget.type.hint : null,
+          hintStyle: TextStyle(color: Colors.grey.shade400),
+          border: InputBorder.none,
+          isDense: true,
+          contentPadding: EdgeInsets.zero,
+        ),
       ),
     );
 

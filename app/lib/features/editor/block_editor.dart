@@ -23,7 +23,13 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
 
   String? _activeSlashBlockId;
   String _slashQuery = '';
+  LayerLink? _slashLink;
+  Offset _slashLocalOffset = Offset.zero;
+  bool _slashOpenAbove = false;
   OverlayEntry? _slashOverlay;
+
+  /// Max height of the slash menu — must match SlashMenu's maxHeight.
+  static const double _slashMenuMaxHeight = 320;
 
   FocusNode _focusFor(String id) {
     return _focusNodes.putIfAbsent(id, FocusNode.new);
@@ -152,9 +158,11 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
             });
           }
         },
-        onSlashTyped: (text, _) {
+        onSlashTyped: (text, link, localOffset) {
           _activeSlashBlockId = block.id;
           _slashQuery = '';
+          _slashLink = link;
+          _slashLocalOffset = localOffset;
           _showSlashMenu(block.id);
         },
         onSlashQueryChanged: (query) {
@@ -173,34 +181,62 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
   void _showSlashMenu(String blockId) {
     _slashOverlay?.remove();
     final overlay = Overlay.of(context);
-    final renderBox = context.findRenderObject() as RenderBox?;
-    if (renderBox == null) return;
+    final link = _slashLink;
+    if (link == null) return;
 
+    // Decide whether to open the menu below the caret (preferred) or above
+    // it (when too close to the bottom of the screen).
+    _slashOpenAbove = false;
     final focusNode = _focusFor(blockId);
-    final blockContext = focusNode.context;
-    if (blockContext == null) return;
-    final blockBox = blockContext.findRenderObject() as RenderBox?;
-    if (blockBox == null) return;
+    final box = focusNode.context?.findRenderObject() as RenderBox?;
+    if (box != null && box.hasSize) {
+      // `_slashLocalOffset.dy` is the position just below the caret line,
+      // relative to the TextField's top-left.
+      final caretBottomGlobal = box.localToGlobal(Offset(0, _slashLocalOffset.dy)).dy;
+      final screenHeight = MediaQuery.of(context).size.height;
+      const buffer = 16.0;
+      if (screenHeight - caretBottomGlobal < _slashMenuMaxHeight + buffer) {
+        _slashOpenAbove = true;
+      }
+    }
 
-    final blockOffset = blockBox.localToGlobal(Offset.zero);
-    final blockSize = blockBox.size;
+    // For "open below": follower's top-left anchored at target top-left,
+    // offset so the menu starts right below the caret line.
+    // For "open above": follower's bottom-left anchored at target top-left,
+    // offset so the menu's bottom sits just above the caret line.
+    final openAbove = _slashOpenAbove;
+    final lineHeight = _slashLocalOffset.dy; // = caret.dy + lineHeight (see BlockWidget)
+    final caretTopY = lineHeight - _approxLineHeight; // approximate top of caret line
+    final followerOffset = openAbove
+        ? Offset(_slashLocalOffset.dx, caretTopY - 4)
+        : Offset(_slashLocalOffset.dx, _slashLocalOffset.dy + 4);
 
     _slashOverlay = OverlayEntry(
       builder: (ctx) => Positioned(
-        left: blockOffset.dx,
-        top: blockOffset.dy + blockSize.height + 4,
-        child: Material(
-          color: Colors.transparent,
-          child: SlashMenu(
-            query: _slashQuery,
-            onSelect: (type) => _applySlashSelection(blockId, type),
-            onDismiss: _hideSlashMenu,
+        left: 0,
+        top: 0,
+        child: CompositedTransformFollower(
+          link: link,
+          showWhenUnlinked: false,
+          followerAnchor: openAbove ? Alignment.bottomLeft : Alignment.topLeft,
+          offset: followerOffset,
+          child: Material(
+            color: Colors.transparent,
+            child: SlashMenu(
+              query: _slashQuery,
+              onSelect: (type) => _applySlashSelection(blockId, type),
+              onDismiss: _hideSlashMenu,
+            ),
           ),
         ),
       ),
     );
     overlay.insert(_slashOverlay!);
   }
+
+  /// Approximate line-height used when deciding caret top for "open above"
+  /// positioning. Matches the default paragraph text style.
+  static const double _approxLineHeight = 16 * 1.6;
 
   void _updateSlashMenu() {
     if (_slashOverlay != null) {
@@ -213,6 +249,8 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
     _slashOverlay = null;
     _activeSlashBlockId = null;
     _slashQuery = '';
+    _slashLink = null;
+    _slashLocalOffset = Offset.zero;
   }
 
   Future<void> _applySlashSelection(String blockId, BlockType type) async {
