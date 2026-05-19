@@ -1,0 +1,16 @@
+services:
+  scrapbook:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: scrapbook-server:latest
+    container_name: scrapbook
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      SCRAPBOOK_TOKEN: "${SCRAPBOOK_TOKEN:?SCRAPBOOK_TOKEN is required}"
+      DATABASE_URL: "sqlite:/data/scrapbook.db"
+      RUST_LOG: "scrapbook_server=info,tower_http=debug"

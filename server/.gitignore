@@ -1,0 +1,14 @@
+# Rust build artifacts
+/target
+
+# SQLite database files (created at runtime)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Environment / secrets
+.env
+.env.*
+!.env.example

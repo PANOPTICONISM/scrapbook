@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment / secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# Logs
+*.log
+logs/
+
+# Docker volumes (created by docker-compose)
+docker/data/
