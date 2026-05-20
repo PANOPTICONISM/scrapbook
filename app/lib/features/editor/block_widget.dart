@@ -15,8 +15,11 @@ class BlockWidget extends StatefulWidget {
   final void Function(bool) onTodoCheckedChanged;
   final VoidCallback onEnterPressed;
   final VoidCallback onBackspaceEmpty;
-  final VoidCallback onArrowUpAtStart;
-  final VoidCallback onArrowDownAtEnd;
+  /// Fires when ↑ is pressed and there's no line above inside this block.
+  /// The [caretX] is the caret's x position in the field's local coords so
+  /// the receiving block can land the cursor under the same column.
+  final void Function(double caretX) onArrowUpAtStart;
+  final void Function(double caretX) onArrowDownAtEnd;
   /// Called once when `/` is typed. The [link] tracks the TextField's screen
   /// position; the [localCaretOffset] is the position of the caret inside the
   /// TextField (TextField-local coordinates).
@@ -231,66 +234,101 @@ class BlockWidgetState extends State<BlockWidget> {
       return KeyEventResult.handled;
     }
 
-    // Arrow keys hop blocks when the caret is on the first/last visual line
-    // (computed via TextPainter so wrapped paragraphs still scroll within).
-    final selection = _controller.selection;
-    final isCollapsed = selection.isCollapsed;
-    if (isCollapsed) {
+    // Arrow keys hop to the prev/next block only when the caret has nowhere
+    // else to go inside this field — wrapped paragraphs still navigate within.
+    if (_controller.selection.isCollapsed) {
       final isUp = event.logicalKey == LogicalKeyboardKey.arrowUp;
       final isDown = event.logicalKey == LogicalKeyboardKey.arrowDown;
-      if (isUp && _caretIsOnFirstVisualLine()) {
-        widget.onArrowUpAtStart();
-        return KeyEventResult.handled;
-      }
-      if (isDown && _caretIsOnLastVisualLine()) {
-        widget.onArrowDownAtEnd();
-        return KeyEventResult.handled;
+      if (isUp || isDown) {
+        final m = _measureCaretMovement();
+        final caretX = m?.caretX ?? 0;
+        if (isUp && (m == null || !m.canGoUp)) {
+          widget.onArrowUpAtStart(caretX);
+          return KeyEventResult.handled;
+        }
+        if (isDown && (m == null || !m.canGoDown)) {
+          widget.onArrowDownAtEnd(caretX);
+          return KeyEventResult.handled;
+        }
       }
     }
 
     return KeyEventResult.ignored;
   }
 
-  bool _caretIsOnFirstVisualLine() {
-    final m = _measureCaret();
-    if (m == null) return true;
-    final (caretY, firstLineHeight, _) = m;
-    return caretY < firstLineHeight;
-  }
-
-  bool _caretIsOnLastVisualLine() {
-    final m = _measureCaret();
-    if (m == null) return true;
-    final (caretY, _, lastLineTop) = m;
-    return caretY >= lastLineTop;
-  }
-
-  /// Returns (caretY, firstLineHeight, lastLineTop) for the current selection,
-  /// in TextField-local coordinates, or null if layout isn't ready.
-  (double, double, double)? _measureCaret() {
+  ({bool canGoUp, bool canGoDown, double caretX})? _measureCaretMovement() {
     final ctx = _fieldKey.currentContext;
     final box = ctx?.findRenderObject() as RenderBox?;
     if (box == null || !box.hasSize) return null;
 
     final text = _controller.text;
-    if (text.isEmpty) return (0, double.infinity, 0);
+    if (text.isEmpty) {
+      return (canGoUp: false, canGoDown: false, caretX: 0);
+    }
+
+    final style = _textStyle(context);
+    final lineHeight = (style.fontSize ?? 16) * (style.height ?? 1.4);
+    final caretRect = Rect.fromLTWH(0, 0, 2, lineHeight);
 
     final tp = TextPainter(
-      text: TextSpan(text: text, style: _textStyle(context)),
+      text: TextSpan(text: text, style: style),
       textDirection: TextDirection.ltr,
       maxLines: null,
     )..layout(maxWidth: box.size.width);
 
-    final caretOffset = tp.getOffsetForCaret(
-      TextPosition(offset: _controller.selection.baseOffset.clamp(0, text.length)),
-      Rect.zero,
-    );
+    final caretIndex = _controller.selection.baseOffset.clamp(0, text.length);
+    final caretOffset = tp.getOffsetForCaret(TextPosition(offset: caretIndex), caretRect);
 
-    final lines = tp.computeLineMetrics();
-    if (lines.isEmpty) return null;
-    final firstLineHeight = lines.first.height;
-    final lastLineTop = lines.last.baseline - lines.last.ascent;
-    return (caretOffset.dy, firstLineHeight, lastLineTop);
+    Offset offsetForPos(TextPosition p) => tp.getOffsetForCaret(p, caretRect);
+
+    final aboveProbe = Offset(caretOffset.dx, caretOffset.dy - lineHeight * 0.5);
+    final above = offsetForPos(tp.getPositionForOffset(aboveProbe));
+    final canGoUp = above.dy < caretOffset.dy - 0.5;
+
+    final belowProbe = Offset(caretOffset.dx, caretOffset.dy + lineHeight * 1.5);
+    final below = offsetForPos(tp.getPositionForOffset(belowProbe));
+    final canGoDown = below.dy > caretOffset.dy + 0.5;
+
+    return (canGoUp: canGoUp, canGoDown: canGoDown, caretX: caretOffset.dx);
+  }
+
+  /// Place the caret near the given x on this block's last visual line.
+  /// Called by the parent when arrow-up navigates *into* this block from below.
+  void placeCaretAtBottomNear(double x) {
+    _placeCaretByXAndYRatio(x, 1.0);
+  }
+
+  /// Place the caret near the given x on this block's first visual line.
+  void placeCaretAtTopNear(double x) {
+    _placeCaretByXAndYRatio(x, 0.0);
+  }
+
+  void _placeCaretByXAndYRatio(double x, double yRatio) {
+    final text = _controller.text;
+    if (text.isEmpty) {
+      _controller.selection = const TextSelection.collapsed(offset: 0);
+      return;
+    }
+
+    final ctx = _fieldKey.currentContext;
+    final box = ctx?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) {
+      _controller.selection = TextSelection.collapsed(
+        offset: yRatio < 0.5 ? 0 : text.length,
+      );
+      return;
+    }
+
+    final style = _textStyle(context);
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: TextDirection.ltr,
+      maxLines: null,
+    )..layout(maxWidth: box.size.width);
+
+    final targetY = yRatio < 0.5 ? 1.0 : tp.height - 1.0;
+    final position = tp.getPositionForOffset(Offset(x, targetY));
+    _controller.selection = TextSelection.collapsed(offset: position.offset);
   }
 
   @override

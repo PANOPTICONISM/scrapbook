@@ -175,11 +175,17 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
           ref.read(syncProvider.notifier).triggerDirtySync();
           if (prev != null) _focusBlockAfterLayout(prev.id);
         },
-        onArrowUpAtStart: () {
-          if (i > 0) _focusFor(blocks[i - 1].id).requestFocus();
+        onArrowUpAtStart: (caretX) {
+          if (i == 0) return;
+          final prevId = blocks[i - 1].id;
+          _focusFor(prevId).requestFocus();
+          _blockKeys[prevId]?.currentState?.placeCaretAtBottomNear(caretX);
         },
-        onArrowDownAtEnd: () {
-          if (i + 1 < blocks.length) _focusFor(blocks[i + 1].id).requestFocus();
+        onArrowDownAtEnd: (caretX) {
+          if (i + 1 >= blocks.length) return;
+          final nextId = blocks[i + 1].id;
+          _focusFor(nextId).requestFocus();
+          _blockKeys[nextId]?.currentState?.placeCaretAtTopNear(caretX);
         },
         onSlashTyped: (text, link, localOffset) {
           _activeSlashBlockId = block.id;
