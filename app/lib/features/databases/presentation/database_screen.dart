@@ -72,6 +72,25 @@ class _DatabaseScreenState extends ConsumerState<DatabaseScreen> {
 
     return Scaffold(
       appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Back',
+          onPressed: () async {
+            final repo = ref.read(pageRepositoryProvider);
+            final self = await repo.getPage(widget.pageId);
+            if (!context.mounted) return;
+            final parentId = self?.parentId;
+            if (parentId == null) {
+              context.go('/pages');
+              return;
+            }
+            final parent = await repo.getPage(parentId);
+            if (!context.mounted) return;
+            context.go(parent != null && parent.isDatabase
+                ? '/pages/$parentId/db'
+                : '/pages/$parentId');
+          },
+        ),
         title: TextField(
           controller: _titleCtrl,
           focusNode: _titleFocus,

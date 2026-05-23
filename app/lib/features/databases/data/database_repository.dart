@@ -85,6 +85,52 @@ class DatabaseRepository {
     ));
   }
 
+  Stream<DatabaseRowModel?> watchRowByPageId(String pageId) {
+    return _db.customSelect(
+      'SELECT 1',
+      readsFrom: {_db.databaseRowsTable, _db.databasePropertyValuesTable},
+    ).watch().asyncMap((_) => _loadRowByPageId(pageId));
+  }
+
+  Future<DatabaseRowModel?> _loadRowByPageId(String pageId) async {
+    final row = await (_db.select(_db.databaseRowsTable)
+          ..where((r) => r.pageId.equals(pageId))
+          ..where((r) => r.deletedAt.isNull())
+          ..limit(1))
+        .getSingleOrNull();
+    if (row == null) return null;
+
+    final values = await (_db.select(_db.databasePropertyValuesTable)
+          ..where((v) => v.rowId.equals(row.id)))
+        .get();
+
+    final valueMap = <String, PropertyValue>{};
+    for (final v in values) {
+      if (v.valueText != null) {
+        valueMap[v.propertyId] = TextValue(v.valueText!);
+      } else if (v.valueNumber != null) {
+        valueMap[v.propertyId] = NumberValue(v.valueNumber!);
+      } else if (v.valueDate != null) {
+        valueMap[v.propertyId] =
+            DateValue(DateTime.fromMillisecondsSinceEpoch(v.valueDate!));
+      } else if (v.valueBool != null) {
+        valueMap[v.propertyId] = CheckboxValue(v.valueBool!);
+      } else if (v.valueSelect != null) {
+        valueMap[v.propertyId] = SelectValue(v.valueSelect!);
+      }
+    }
+
+    return DatabaseRowModel(
+      id: row.id,
+      databaseId: row.databaseId,
+      pageId: row.pageId,
+      position: row.position,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      values: valueMap,
+    );
+  }
+
   Stream<List<DatabaseRowModel>> watchRows(String databaseId) {
     // Watch both tables so changes to a value (e.g. from sync) re-fire even
     // when the row's updated_at didn't change.

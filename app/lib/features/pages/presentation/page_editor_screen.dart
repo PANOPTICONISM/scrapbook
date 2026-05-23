@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../../features/databases/presentation/row_properties_panel.dart';
 import '../../../features/editor/block_editor.dart';
 import '../../../features/sync/sync_provider.dart';
 import '../data/page_repository.dart';
@@ -66,6 +68,25 @@ class _PageEditorScreenState extends ConsumerState<PageEditorScreen> {
         title: const SizedBox.shrink(),
         elevation: 0,
         scrolledUnderElevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Back',
+          onPressed: () async {
+            final repo = ref.read(pageRepositoryProvider);
+            final page = await repo.getPage(widget.pageId);
+            if (!context.mounted) return;
+            final parentId = page?.parentId;
+            if (parentId == null) {
+              context.go('/pages');
+              return;
+            }
+            final parent = await repo.getPage(parentId);
+            if (!context.mounted) return;
+            context.go(parent != null && parent.isDatabase
+                ? '/pages/$parentId/db'
+                : '/pages/$parentId');
+          },
+        ),
       ),
       body: Column(
         children: [
@@ -80,6 +101,13 @@ class _PageEditorScreenState extends ConsumerState<PageEditorScreen> {
                 hintStyle: TextStyle(color: Colors.grey),
                 border: InputBorder.none,
               ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 60),
+            child: RowPropertiesPanel(
+              key: ValueKey('props-${widget.pageId}'),
+              pageId: widget.pageId,
             ),
           ),
           Expanded(
