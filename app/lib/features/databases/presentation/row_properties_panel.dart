@@ -391,7 +391,8 @@ String _typeLabel(PropertyType t) => switch (t) {
       PropertyType.select => 'Select',
     };
 
-/// Anchors a [showMenu] popup to the bounds of the widget owning [key].
+/// Anchors a [showMenu] popup just to the right of the widget owning [key],
+/// tops aligned, so the menu opens beside the click instead of on top of it.
 RelativeRect? _menuPositionFor(GlobalKey key, BuildContext context) {
   final box = key.currentContext?.findRenderObject() as RenderBox?;
   if (box == null) return null;
@@ -400,9 +401,11 @@ RelativeRect? _menuPositionFor(GlobalKey key, BuildContext context) {
   final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
   final bottomRight =
       box.localToGlobal(box.size.bottomRight(Offset.zero), ancestor: overlay);
-  return RelativeRect.fromRect(
-    Rect.fromPoints(topLeft, bottomRight),
-    Offset.zero & overlay.size,
+  return RelativeRect.fromLTRB(
+    bottomRight.dx + 4,
+    topLeft.dy,
+    overlay.size.width - bottomRight.dx + 4,
+    overlay.size.height - topLeft.dy,
   );
 }
 

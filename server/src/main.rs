@@ -74,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
     cleanup::spawn(state.clone());
 
     let app = Router::new()
+        .route("/api/health", get(|| async { "ok" }))
         .route("/api/pages", get(pages::list_pages).post(pages::create_page))
         .route("/api/pages/{id}", get(pages::get_page).patch(pages::update_page).delete(pages::delete_page))
         .route("/api/pages/{page_id}/blocks", get(blocks::list_blocks))

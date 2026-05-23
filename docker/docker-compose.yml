@@ -7,10 +7,11 @@ services:
     container_name: scrapbook
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "${PORT:-47291}:${PORT:-47291}"
     volumes:
       - ./data:/data
     environment:
-      SCRAPBOOK_TOKEN: "${SCRAPBOOK_TOKEN:?SCRAPBOOK_TOKEN is required}"
+      SCRAPBOOK_TOKEN: "${SCRAPBOOK_TOKEN:?Set SCRAPBOOK_TOKEN in docker/.env (see .env.example)}"
       DATABASE_URL: "sqlite:/data/scrapbook.db"
-      RUST_LOG: "scrapbook_server=info,tower_http=debug"
+      PORT: "${PORT:-47291}"
+      RUST_LOG: "${RUST_LOG:-scrapbook_server=info,tower_http=info}"

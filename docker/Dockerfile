@@ -1,36 +1,36 @@
-# Stage 1: Build
-FROM rust:1.78-slim AS builder
+# syntax=docker/dockerfile:1
 
-RUN apt-get update && apt-get install -y musl-tools libssl-dev pkg-config && rm -rf /var/lib/apt/lists/*
-
-RUN rustup target add x86_64-unknown-linux-musl
+FROM rust:1-slim-bookworm AS builder
 
 WORKDIR /app
 
-# Cache dependencies by building with a stub main first
 COPY server/Cargo.toml server/Cargo.lock ./
-RUN mkdir src && echo "fn main() {}" > src/main.rs
-RUN cargo build --release --target x86_64-unknown-linux-musl
-RUN rm -rf src
+RUN mkdir src \
+    && echo "fn main() {}" > src/main.rs \
+    && cargo build --release \
+    && rm -rf src
 
-# Build the real binary
 COPY server/src ./src
-RUN touch src/main.rs && cargo build --release --target x86_64-unknown-linux-musl
+RUN touch src/main.rs && cargo build --release
 
-# Stage 2: Minimal runtime image
-FROM alpine:3.19
+FROM debian:bookworm-slim
 
-RUN apk add --no-cache ca-certificates
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /data
 
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/scrapbook-server /usr/local/bin/scrapbook-server
+COPY --from=builder /app/target/release/scrapbook-server /usr/local/bin/scrapbook-server
 
-EXPOSE 8080
+ENV DATABASE_URL="sqlite:/data/scrapbook.db" \
+    HOST="0.0.0.0" \
+    PORT="47291"
+
+EXPOSE ${PORT}
 VOLUME ["/data"]
 
-ENV DATABASE_URL="sqlite:/data/scrapbook.db"
-ENV HOST="0.0.0.0"
-ENV PORT="8080"
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${PORT}/api/health" || exit 1
 
 CMD ["scrapbook-server"]
