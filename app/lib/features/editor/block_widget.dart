@@ -1,7 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'block_types.dart';
+import 'inline_style.dart';
+import 'link_editor_popover.dart';
+import 'link_hover_preview.dart';
+import 'markdown_codec.dart';
+import 'rich_text_controller.dart';
+import 'selection_format_bar.dart';
 
 /// An editable block. Renders content in its formatted style while editing.
 class BlockWidget extends StatefulWidget {
@@ -58,30 +65,105 @@ class BlockWidget extends StatefulWidget {
 }
 
 class BlockWidgetState extends State<BlockWidget> {
-  late TextEditingController _controller;
+  // Must match the `base` TextStyle in _textStyle().
+  static const _kBaseFontSize = 16.0;
+  static const _kBaseLineHeight = 1.6;
+
+  late RichTextController _controller;
   final GlobalKey _fieldKey = GlobalKey();
   final LayerLink _fieldLink = LayerLink();
   bool _slashActive = false;
   int _slashStart = -1;
+
+  OverlayEntry? _formatBar;
+  TextSelection? _formatBarSelection;
+  TextSelection? _consumedSelection;
+  OverlayEntry? _linkPopover;
+  OverlayEntry? _linkHover;
 
   /// Called by the parent after a slash selection is applied. Clears the slash
   /// query text from the field and resets the internal slash-tracking state.
   void onSlashConfirmed() {
     _slashActive = false;
     _slashStart = -1;
-    _controller.text = '';
+    _controller.setStyledText('', const <InlineStyle>[]);
   }
 
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(text: widget.content);
+    _controller = RichTextController.fromMarkdown(widget.content);
+    _controller.onLinkTap = _openLink;
+    _controller.onLinkHover = _showLinkHover;
+    _controller.onLinkHoverEnd = _hideLinkHover;
     _controller.addListener(_onTextChanged);
     widget.focusNode?.addListener(_onFocusChanged);
   }
 
+  static const _allowedSchemes = {'http', 'https', 'mailto'};
+
+  Future<void> _openLink(String url) async {
+    var normalized = url.trim();
+    if (normalized.isEmpty) return;
+    final schemeMatch =
+        RegExp(r'^([a-zA-Z][a-zA-Z0-9+.\-]*):').firstMatch(normalized);
+    if (schemeMatch == null) {
+      normalized = 'https://$normalized';
+    } else if (!_allowedSchemes.contains(schemeMatch.group(1)!.toLowerCase())) {
+      // Refuse schemes that could execute code or read local files.
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text('Blocked link scheme: ${schemeMatch.group(1)}')),
+      );
+      return;
+    }
+
+    final uri = Uri.tryParse(normalized);
+    if (uri == null) return;
+
+    final messenger = mounted ? ScaffoldMessenger.maybeOf(context) : null;
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok) {
+        messenger?.showSnackBar(
+          SnackBar(content: Text("Couldn't open $normalized")),
+        );
+      }
+    } catch (_) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text("Couldn't open $normalized")),
+      );
+    }
+  }
+
+  void _showLinkHover(String url, Offset globalPos) {
+    _linkHover?.remove();
+    _linkHover = _addOverlay(
+      left: globalPos.dx + 12,
+      top: globalPos.dy + 16,
+      child: LinkHoverPreview(url: url),
+    );
+  }
+
+  void _hideLinkHover() {
+    _linkHover?.remove();
+    _linkHover = null;
+  }
+
   void _onFocusChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    if (!_isFocused()) {
+      _hideFormatBar();
+      if (_slashActive) {
+        _slashActive = false;
+        _slashStart = -1;
+        widget.onSlashDismissed();
+      }
+    }
+    // A focus change is a strong signal that the previous "I just acted on
+    // this selection" gesture is over; clear the guard so a re-selection of
+    // the same range will surface the bar again.
+    _consumedSelection = null;
+    setState(() {});
   }
 
   @override
@@ -91,35 +173,77 @@ class BlockWidgetState extends State<BlockWidget> {
       oldWidget.focusNode?.removeListener(_onFocusChanged);
       widget.focusNode?.addListener(_onFocusChanged);
     }
-    if (widget.content != _controller.text && !_isFocused()) {
-      _controller.text = widget.content;
+    // Sync external content changes (e.g. from sync) when the user isn't
+    // mid-edit. Compare against the controller's markdown form, not its plain
+    // text, otherwise visible-text-equals-markdown blocks would silently lose
+    // their styles on every rebuild.
+    if (widget.content != _controller.toMarkdown() && !_isFocused()) {
+      final styled = MarkdownCodec.decode(widget.content);
+      _controller.setStyledText(styled.text, styled.styles);
     }
   }
 
   bool _isFocused() => widget.focusNode?.hasFocus ?? false;
 
-  /// Compute the caret's offset *inside* the TextField (local coordinates).
-  /// Used together with a LayerLink so the slash menu can anchor to the caret
-  /// regardless of where the TextField sits on screen.
-  Offset _caretLocalOffset(String text, int slashIndex) {
+  /// Lays out the field's current text in its actual rendered width. Returns
+  /// the field's [RenderBox] together with a configured [TextPainter], or null
+  /// when the field hasn't laid out yet.
+  ({RenderBox box, TextPainter painter})? _layoutPainter({String? overrideText}) {
     final ctx = _fieldKey.currentContext;
-    if (ctx == null) return Offset.zero;
-    final renderBox = ctx.findRenderObject() as RenderBox?;
-    if (renderBox == null || !renderBox.hasSize) return Offset.zero;
-
-    final style = _textStyle(context);
-    final tp = TextPainter(
-      text: TextSpan(text: text.substring(0, slashIndex + 1), style: style),
+    final box = ctx?.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return null;
+    final painter = TextPainter(
+      text: TextSpan(text: overrideText ?? _controller.text, style: _textStyle(context)),
       textDirection: TextDirection.ltr,
       maxLines: null,
-    )..layout(maxWidth: renderBox.size.width);
+    )..layout(maxWidth: box.size.width);
+    return (box: box, painter: painter);
+  }
 
-    final caretLocal = tp.getOffsetForCaret(
+  /// Insert [child] into the root overlay, positioned with absolute screen
+  /// coordinates. Returns the entry so the caller can store and remove it.
+  OverlayEntry _addOverlay({required double left, required double top, required Widget child}) {
+    final entry = OverlayEntry(
+      builder: (_) => Positioned(left: left, top: top, child: child),
+    );
+    Overlay.of(context, rootOverlay: true).insert(entry);
+    return entry;
+  }
+
+  /// Insert [child] anchored above the start of [sel], with [child]'s bottom
+  /// sitting [height] + [gap] above the selection's top. Returns null if the
+  /// selection can't be laid out (e.g. collapsed or before first frame).
+  OverlayEntry? _anchorAboveSelection({
+    required TextSelection sel,
+    required Widget child,
+    required double height,
+    double gap = 6,
+  }) {
+    final layout = _layoutPainter();
+    if (layout == null) return null;
+    final boxes = layout.painter.getBoxesForSelection(sel);
+    if (boxes.isEmpty) return null;
+    final topLeft = layout.box.localToGlobal(
+      Offset(boxes.first.left, boxes.first.top),
+    );
+    return _addOverlay(
+      left: topLeft.dx,
+      top: topLeft.dy - height - gap,
+      child: child,
+    );
+  }
+
+  /// Position just below the caret line, in TextField-local coordinates.
+  /// Anchors the slash menu to the caret regardless of where the field sits.
+  Offset _caretLocalOffset(String text, int slashIndex) {
+    final layout = _layoutPainter(overrideText: text.substring(0, slashIndex + 1));
+    if (layout == null) return Offset.zero;
+    final caretLocal = layout.painter.getOffsetForCaret(
       TextPosition(offset: slashIndex + 1),
       Rect.zero,
     );
-
-    final lineHeight = (style.fontSize ?? 16) * (style.height ?? 1.4);
+    final style = _textStyle(context);
+    final lineHeight = (style.fontSize ?? _kBaseFontSize) * (style.height ?? _kBaseLineHeight);
     return Offset(caretLocal.dx, caretLocal.dy + lineHeight);
   }
 
@@ -149,8 +273,145 @@ class BlockWidgetState extends State<BlockWidget> {
     }
 
     _checkMarkdownShortcuts(text);
+    _updateFormatBar();
 
-    widget.onContentChanged(text);
+    widget.onContentChanged(_controller.toMarkdown());
+  }
+
+  void _updateFormatBar() {
+    if (_slashActive) {
+      if (_formatBar != null) _hideFormatBar();
+      return;
+    }
+    final sel = _controller.selection;
+    // The "consumed" guard only suppresses the bar for the exact selection the
+    // user just acted on; any new selection (even a tiny adjustment) clears it.
+    if (_consumedSelection != null && _consumedSelection != sel) {
+      _consumedSelection = null;
+    }
+    if (sel.isValid && !sel.isCollapsed) {
+      if (_consumedSelection == sel) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final current = _controller.selection;
+        if (current.isValid &&
+            !current.isCollapsed &&
+            _consumedSelection != current &&
+            !_slashActive) {
+          _showFormatBar();
+        }
+      });
+    } else if (_formatBar != null) {
+      _hideFormatBar();
+    }
+  }
+
+  void _showFormatBar() {
+    _formatBar?.remove();
+    _formatBar = null;
+    _linkPopover?.remove();
+    _linkPopover = null;
+
+    final sel = _controller.selection;
+    // Snapshot the selection now — pointer-down on a toolbar button can race
+    // with focus changes and momentarily collapse the live selection.
+    _formatBarSelection = sel;
+    _formatBar = _anchorAboveSelection(
+      sel: sel,
+      height: 32,
+      child: SelectionFormatBar(onAction: _applyFormat),
+    );
+  }
+
+  void _hideFormatBar() {
+    _formatBar?.remove();
+    _formatBar = null;
+    _formatBarSelection = null;
+  }
+
+  void _applyFormat(FormatAction action) {
+    final captured = _formatBarSelection;
+    if (captured == null || !captured.isValid || captured.isCollapsed) {
+      return;
+    }
+
+    if (action == FormatAction.link) {
+      _hideFormatBar();
+      _consumedSelection = captured;
+      _applyLink(captured);
+      return;
+    }
+
+    switch (action) {
+      case FormatAction.bold:
+        _toggleStyle(captured, (s) => s.bold, (s, v) => s.copyWith(bold: v));
+      case FormatAction.italic:
+        _toggleStyle(
+            captured, (s) => s.italic, (s, v) => s.copyWith(italic: v));
+      case FormatAction.code:
+        _toggleStyle(captured, (s) => s.code, (s, v) => s.copyWith(code: v));
+      case FormatAction.strikethrough:
+        _toggleStyle(
+          captured,
+          (s) => s.strikethrough,
+          (s, v) => s.copyWith(strikethrough: v),
+        );
+      case FormatAction.link:
+        break;
+    }
+    _controller.selection = captured;
+    _consumedSelection = captured;
+    _hideFormatBar();
+    widget.focusNode?.requestFocus();
+  }
+
+  /// Toggle one style flag across [sel]. If every char already has it, turn it
+  /// off; otherwise turn it on for all chars.
+  void _toggleStyle(
+    TextSelection sel,
+    bool Function(InlineStyle) read,
+    InlineStyle Function(InlineStyle, bool) write,
+  ) {
+    final allOn = _controller.selectionHasStyle(sel, read);
+    _controller.mapStyles(sel, (s) => write(s, !allOn));
+  }
+
+  void _applyLink(TextSelection sel) {
+    final existing = _controller.styleAt(sel.start).linkUrl;
+    _showLinkPopover(sel, existing);
+  }
+
+  void _showLinkPopover(TextSelection sel, String? initialUrl) {
+    _linkPopover?.remove();
+    _linkPopover = null;
+    _formatBar?.remove();
+    _formatBar = null;
+
+    void close() {
+      _linkPopover?.remove();
+      _linkPopover = null;
+      _controller.selection = sel;
+      widget.focusNode?.requestFocus();
+    }
+
+    void apply(String url) {
+      if (url.isEmpty) {
+        _controller.mapStyles(sel, (s) => s.copyWith(clearLinkUrl: true));
+      } else {
+        _controller.mapStyles(sel, (s) => s.copyWith(linkUrl: url));
+      }
+      close();
+    }
+
+    _linkPopover = _anchorAboveSelection(
+      sel: sel,
+      height: 52,
+      child: LinkEditorPopover(
+        initialUrl: initialUrl,
+        onApply: apply,
+        onCancel: close,
+      ),
+    );
   }
 
   void _checkMarkdownShortcuts(String text) {
@@ -194,8 +455,38 @@ class BlockWidgetState extends State<BlockWidget> {
     }
   }
 
+  /// Apply a format action using the controller's *current* selection
+  /// (used by the keyboard shortcuts; the format bar uses its captured one).
+  void _applyFormatToCurrent(FormatAction action) {
+    final sel = _controller.selection;
+    if (!sel.isValid || sel.isCollapsed) return;
+    _formatBarSelection = sel;
+    _applyFormat(action);
+  }
+
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    final hk = HardwareKeyboard.instance;
+    final isMod = hk.isMetaPressed || hk.isControlPressed;
+    if (isMod && !hk.isShiftPressed && !hk.isAltPressed) {
+      if (event.logicalKey == LogicalKeyboardKey.keyB) {
+        _applyFormatToCurrent(FormatAction.bold);
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.keyI) {
+        _applyFormatToCurrent(FormatAction.italic);
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.keyE) {
+        _applyFormatToCurrent(FormatAction.code);
+        return KeyEventResult.handled;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.keyK) {
+        _applyFormatToCurrent(FormatAction.link);
+        return KeyEventResult.handled;
+      }
+    }
 
     // While the slash menu is open, arrow keys and Enter drive the menu.
     if (_slashActive) {
@@ -257,28 +548,21 @@ class BlockWidgetState extends State<BlockWidget> {
   }
 
   ({bool canGoUp, bool canGoDown, double caretX})? _measureCaretMovement() {
-    final ctx = _fieldKey.currentContext;
-    final box = ctx?.findRenderObject() as RenderBox?;
-    if (box == null || !box.hasSize) return null;
-
     final text = _controller.text;
     if (text.isEmpty) {
       return (canGoUp: false, canGoDown: false, caretX: 0);
     }
+    final layout = _layoutPainter();
+    if (layout == null) return null;
 
     final style = _textStyle(context);
-    final lineHeight = (style.fontSize ?? 16) * (style.height ?? 1.4);
+    final lineHeight =
+        (style.fontSize ?? _kBaseFontSize) * (style.height ?? _kBaseLineHeight);
     final caretRect = Rect.fromLTWH(0, 0, 2, lineHeight);
-
-    final tp = TextPainter(
-      text: TextSpan(text: text, style: style),
-      textDirection: TextDirection.ltr,
-      maxLines: null,
-    )..layout(maxWidth: box.size.width);
+    final tp = layout.painter;
 
     final caretIndex = _controller.selection.baseOffset.clamp(0, text.length);
     final caretOffset = tp.getOffsetForCaret(TextPosition(offset: caretIndex), caretRect);
-
     Offset offsetForPos(TextPosition p) => tp.getOffsetForCaret(p, caretRect);
 
     final aboveProbe = Offset(caretOffset.dx, caretOffset.dy - lineHeight * 0.5);
@@ -309,23 +593,14 @@ class BlockWidgetState extends State<BlockWidget> {
       _controller.selection = const TextSelection.collapsed(offset: 0);
       return;
     }
-
-    final ctx = _fieldKey.currentContext;
-    final box = ctx?.findRenderObject() as RenderBox?;
-    if (box == null || !box.hasSize) {
+    final layout = _layoutPainter();
+    if (layout == null) {
       _controller.selection = TextSelection.collapsed(
         offset: yRatio < 0.5 ? 0 : text.length,
       );
       return;
     }
-
-    final style = _textStyle(context);
-    final tp = TextPainter(
-      text: TextSpan(text: text, style: style),
-      textDirection: TextDirection.ltr,
-      maxLines: null,
-    )..layout(maxWidth: box.size.width);
-
+    final tp = layout.painter;
     final targetY = yRatio < 0.5 ? 1.0 : tp.height - 1.0;
     final position = tp.getPositionForOffset(Offset(x, targetY));
     _controller.selection = TextSelection.collapsed(offset: position.offset);
@@ -333,6 +608,9 @@ class BlockWidgetState extends State<BlockWidget> {
 
   @override
   void dispose() {
+    _formatBar?.remove();
+    _linkPopover?.remove();
+    _linkHover?.remove();
     widget.focusNode?.removeListener(_onFocusChanged);
     _controller.removeListener(_onTextChanged);
     _controller.dispose();
