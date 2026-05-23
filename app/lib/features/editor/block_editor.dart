@@ -135,10 +135,16 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
     final block = blocks[i];
     final repo = ref.read(blockRepositoryProvider);
 
+    Future<void> deleteBlock() async {
+      await repo.deleteBlock(block.id);
+      ref.read(syncProvider.notifier).triggerDirtySync();
+    }
+
     if (block.type == BlockType.database) {
       return _DraggableBlock(
         key: ValueKey(block.id),
         index: i,
+        onDelete: deleteBlock,
         child: EmbeddedDatabase(databaseId: block.content),
       );
     }
@@ -151,6 +157,7 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
     return _DraggableBlock(
       key: ValueKey(block.id),
       index: i,
+      onDelete: deleteBlock,
       child: BlockWidget(
         key: blockKey,
         type: block.type,
@@ -364,7 +371,13 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
 class _DraggableBlock extends StatefulWidget {
   final int index;
   final Widget child;
-  const _DraggableBlock({super.key, required this.index, required this.child});
+  final VoidCallback onDelete;
+  const _DraggableBlock({
+    super.key,
+    required this.index,
+    required this.child,
+    required this.onDelete,
+  });
 
   @override
   State<_DraggableBlock> createState() => _DraggableBlockState();
@@ -372,6 +385,40 @@ class _DraggableBlock extends StatefulWidget {
 
 class _DraggableBlockState extends State<_DraggableBlock> {
   bool _hovered = false;
+  final GlobalKey _handleKey = GlobalKey();
+
+  Future<void> _showMenu() async {
+    final box = _handleKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+
+    final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
+    final bottomRight =
+        box.localToGlobal(box.size.bottomRight(Offset.zero), ancestor: overlay);
+
+    final result = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromPoints(topLeft, bottomRight),
+        Offset.zero & overlay.size,
+      ),
+      items: const [
+        PopupMenuItem(
+          value: 'delete',
+          child: Row(
+            children: [
+              Icon(Icons.delete_outline, size: 16, color: Colors.red),
+              SizedBox(width: 8),
+              Text('Delete', style: TextStyle(color: Colors.red)),
+            ],
+          ),
+        ),
+      ],
+    );
+    if (result == 'delete') widget.onDelete();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -388,13 +435,25 @@ class _DraggableBlockState extends State<_DraggableBlock> {
               child: AnimatedOpacity(
                 opacity: _hovered ? 0.6 : 0.0,
                 duration: const Duration(milliseconds: 120),
-                child: ReorderableDragStartListener(
-                  index: widget.index,
-                  child: const Padding(
-                    padding: EdgeInsets.only(top: 6),
-                    child: MouseRegion(
-                      cursor: SystemMouseCursors.grab,
-                      child: Icon(Icons.drag_indicator, size: 18, color: Colors.grey),
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  // The drag handle is also a menu opener: tap shows actions,
+                  // drag reorders. ReorderableDragStartListener only consumes
+                  // the gesture once the pointer moves, leaving pure taps for
+                  // the GestureDetector.
+                  child: GestureDetector(
+                    onTapUp: (_) => _showMenu(),
+                    child: ReorderableDragStartListener(
+                      index: widget.index,
+                      child: MouseRegion(
+                        cursor: SystemMouseCursors.grab,
+                        child: Icon(
+                          key: _handleKey,
+                          Icons.drag_indicator,
+                          size: 18,
+                          color: Colors.grey,
+                        ),
+                      ),
                     ),
                   ),
                 ),

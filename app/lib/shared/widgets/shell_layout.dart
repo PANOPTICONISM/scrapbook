@@ -303,12 +303,18 @@ class _PageTileState extends ConsumerState<_PageTile> {
   bool _hovered = false;
   _DropZone? _hoverZone;
   final GlobalKey _dropTargetKey = GlobalKey();
+  final GlobalKey _menuKey = GlobalKey();
 
   @override
   Widget build(BuildContext context) {
     final page = widget.page;
-    final children = widget.allPages.where((p) => p.parentId == page.id).toList()
-      ..sort((a, b) => a.position.compareTo(b.position));
+    // Pages nested directly under a database are its rows. Treating them as
+    // sub-pages of the database in the sidebar would flood the tree, so we
+    // hide them and let the user reach them via the database itself.
+    final children = page.isDatabase
+        ? const <PageModel>[]
+        : (widget.allPages.where((p) => p.parentId == page.id).toList()
+          ..sort((a, b) => a.position.compareTo(b.position)));
     final route = page.isDatabase ? '/pages/${page.id}/db' : '/pages/${page.id}';
 
     final dragData = Draggable<String>(
@@ -420,14 +426,11 @@ class _PageTileState extends ConsumerState<_PageTile> {
       ),
       trailing: _hovered
           ? IconButton(
+              key: _menuKey,
               icon: const Icon(Icons.more_horiz, size: 16),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
-              onPressed: () {
-                final renderBox = context.findRenderObject() as RenderBox?;
-                final offset = renderBox?.localToGlobal(Offset.zero) ?? Offset.zero;
-                _showContextMenu(context, offset);
-              },
+              onPressed: _showMenuAtIcon,
             )
           : null,
       onTap: () => context.go(route),
@@ -541,13 +544,37 @@ class _PageTileState extends ConsumerState<_PageTile> {
     ref.read(syncProvider.notifier).triggerDirtySync();
   }
 
+  Future<void> _showMenuAtIcon() async {
+    final box = _menuKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (overlay == null) return;
+    final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
+    final bottomRight =
+        box.localToGlobal(box.size.bottomRight(Offset.zero), ancestor: overlay);
+    await _showContextMenuAt(
+      RelativeRect.fromRect(
+        Rect.fromPoints(topLeft, bottomRight),
+        Offset.zero & overlay.size,
+      ),
+    );
+  }
+
   Future<void> _showContextMenu(BuildContext context, Offset position) async {
+    await _showContextMenuAt(RelativeRect.fromLTRB(
+      position.dx,
+      position.dy,
+      position.dx + 200,
+      position.dy + 200,
+    ));
+  }
+
+  Future<void> _showContextMenuAt(RelativeRect position) async {
     final router = GoRouter.of(context);
     final result = await showMenu<String>(
       context: context,
-      position: RelativeRect.fromLTRB(
-        position.dx, position.dy, position.dx + 200, position.dy + 200,
-      ),
+      position: position,
       items: [
         const PopupMenuItem(value: 'rename', child: Row(
           children: [Icon(Icons.edit, size: 16), SizedBox(width: 8), Text('Rename')],
