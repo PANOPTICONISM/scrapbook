@@ -10,7 +10,8 @@ enum BlockType {
   todo,
   quote,
   code,
-  divider;
+  divider,
+  database;
 
   String get value => switch (this) {
         BlockType.paragraph => 'paragraph',
@@ -23,6 +24,7 @@ enum BlockType {
         BlockType.quote => 'quote',
         BlockType.code => 'code',
         BlockType.divider => 'divider',
+        BlockType.database => 'database',
       };
 
   static BlockType fromString(String s) => switch (s) {
@@ -35,6 +37,7 @@ enum BlockType {
         'quote' => BlockType.quote,
         'code' => BlockType.code,
         'divider' => BlockType.divider,
+        'database' => BlockType.database,
         _ => BlockType.paragraph,
       };
 
@@ -49,6 +52,7 @@ enum BlockType {
         BlockType.quote => 'Quote',
         BlockType.code => 'Code',
         BlockType.divider => 'Divider',
+        BlockType.database => 'Database',
       };
 
   IconData get icon => switch (this) {
@@ -62,6 +66,7 @@ enum BlockType {
         BlockType.quote => Icons.format_quote,
         BlockType.code => Icons.code,
         BlockType.divider => Icons.horizontal_rule,
+        BlockType.database => Icons.grid_view,
       };
 
   String get hint => switch (this) {

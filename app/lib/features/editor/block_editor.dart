@@ -3,10 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../pages/data/page_repository.dart';
 import '../sync/sync_provider.dart';
 import 'block_repository.dart';
 import 'block_types.dart';
 import 'block_widget.dart';
+import 'embedded_database.dart';
 import 'slash_menu.dart';
 
 class BlockEditor extends ConsumerStatefulWidget {
@@ -47,6 +49,20 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
     }
     _slashOverlay?.remove();
     super.dispose();
+  }
+
+  /// Walks the blocks list from [start] in [step] direction (±1), skipping
+  /// past any database (or other non-textual) blocks. Returns null if none.
+  BlockData? _findTextBlockAt(List<BlockData> blocks, int start, {required int step}) {
+    int i = start;
+    while (i >= 0 && i < blocks.length) {
+      if (blocks[i].type != BlockType.database &&
+          blocks[i].type != BlockType.divider) {
+        return blocks[i];
+      }
+      i += step;
+    }
+    return null;
   }
 
   void _debouncedSave(String blockId, void Function() save) {
@@ -119,6 +135,14 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
     final block = blocks[i];
     final repo = ref.read(blockRepositoryProvider);
 
+    if (block.type == BlockType.database) {
+      return _DraggableBlock(
+        key: ValueKey(block.id),
+        index: i,
+        child: EmbeddedDatabase(databaseId: block.content),
+      );
+    }
+
     final blockKey = _blockKeys.putIfAbsent(
       block.id,
       () => GlobalKey<BlockWidgetState>(),
@@ -176,16 +200,16 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
           if (prev != null) _focusBlockAfterLayout(prev.id);
         },
         onArrowUpAtStart: (caretX) {
-          if (i == 0) return;
-          final prevId = blocks[i - 1].id;
-          _focusFor(prevId).requestFocus();
-          _blockKeys[prevId]?.currentState?.placeCaretAtBottomNear(caretX);
+          final prev = _findTextBlockAt(blocks, i - 1, step: -1);
+          if (prev == null) return;
+          _focusFor(prev.id).requestFocus();
+          _blockKeys[prev.id]?.currentState?.placeCaretAtBottomNear(caretX);
         },
         onArrowDownAtEnd: (caretX) {
-          if (i + 1 >= blocks.length) return;
-          final nextId = blocks[i + 1].id;
-          _focusFor(nextId).requestFocus();
-          _blockKeys[nextId]?.currentState?.placeCaretAtTopNear(caretX);
+          final next = _findTextBlockAt(blocks, i + 1, step: 1);
+          if (next == null) return;
+          _focusFor(next.id).requestFocus();
+          _blockKeys[next.id]?.currentState?.placeCaretAtTopNear(caretX);
         },
         onSlashTyped: (text, link, localOffset) {
           _activeSlashBlockId = block.id;
@@ -313,10 +337,27 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
   Future<void> _applySlashSelection(String blockId, BlockType type) async {
     _hideSlashMenu();
     _blockKeys[blockId]?.currentState?.onSlashConfirmed();
+    // onSlashConfirmed clears the controller text, which the listener catches
+    // and schedules a debounced save with content=''. We're about to set the
+    // block's content directly, so cancel that pending save or it would race
+    // and overwrite us 400 ms later.
+    _saveTimers.remove(blockId)?.cancel();
+
     final repo = ref.read(blockRepositoryProvider);
-    await repo.updateBlock(blockId, type: type, content: '');
+
+    if (type == BlockType.database) {
+      final pageRepo = ref.read(pageRepositoryProvider);
+      final dbPage = await pageRepo.createPage(
+        isDatabase: true,
+        parentId: widget.pageId,
+      );
+      await repo.updateBlock(blockId, type: type, content: dbPage.id);
+    } else {
+      await repo.updateBlock(blockId, type: type, content: '');
+    }
+
     ref.read(syncProvider.notifier).triggerDirtySync();
-    _focusFor(blockId).requestFocus();
+    if (type != BlockType.database) _focusFor(blockId).requestFocus();
   }
 }
 

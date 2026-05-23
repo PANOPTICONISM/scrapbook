@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -6,6 +8,7 @@ import '../../../features/databases/data/database_repository.dart';
 import '../../../features/databases/domain/database_model.dart';
 import '../../../features/databases/domain/database_row_model.dart';
 import '../../../features/pages/data/page_repository.dart';
+import '../../../features/pages/domain/page_model.dart';
 import '../../../features/sync/sync_provider.dart';
 import 'gallery_view.dart';
 import 'table_view.dart';
@@ -22,20 +25,66 @@ class DatabaseScreen extends ConsumerStatefulWidget {
 
 class _DatabaseScreenState extends ConsumerState<DatabaseScreen> {
   DatabaseView _currentView = DatabaseView.gallery;
+  late final TextEditingController _titleCtrl;
+  final FocusNode _titleFocus = FocusNode();
+  Timer? _titleSaveTimer;
+  String? _loadedTitle;
+
+  @override
+  void initState() {
+    super.initState();
+    _titleCtrl = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _titleSaveTimer?.cancel();
+    _titleCtrl.dispose();
+    _titleFocus.dispose();
+    super.dispose();
+  }
+
+  void _onTitleChanged(String value) {
+    _titleSaveTimer?.cancel();
+    _titleSaveTimer = Timer(const Duration(milliseconds: 400), () async {
+      await ref.read(pageRepositoryProvider).updateTitle(widget.pageId, value);
+      ref.read(syncProvider.notifier).triggerDirtySync();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    final page = ref.watch(allPagesProvider).when(
-          data: (pages) => pages.where((p) => p.id == widget.pageId).firstOrNull,
-          loading: () => null,
-          error: (_, _) => null,
+    final allPages = ref.watch(allPagesProvider).maybeWhen(
+          data: (pages) => pages,
+          orElse: () => const <PageModel>[],
         );
+    final page = allPages.where((p) => p.id == widget.pageId).firstOrNull;
+    final pageTitles = <String, String>{for (final p in allPages) p.id: p.title};
+
+    // Sync the title controller when the page is loaded or changed externally,
+    // but only when the user isn't actively editing it.
+    if (page != null && page.title != _loadedTitle && !_titleFocus.hasFocus) {
+      _loadedTitle = page.title;
+      _titleCtrl.text = page.title;
+    }
 
     final repo = ref.watch(databaseRepositoryProvider);
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(page == null || page.title.isEmpty ? 'Untitled' : page.title),
+        title: TextField(
+          controller: _titleCtrl,
+          focusNode: _titleFocus,
+          onChanged: _onTitleChanged,
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+          decoration: const InputDecoration(
+            hintText: 'Untitled database',
+            hintStyle: TextStyle(color: Colors.grey),
+            border: InputBorder.none,
+            isDense: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
         actions: [
           IconButton(
             tooltip: 'Gallery view',
@@ -81,6 +130,7 @@ class _DatabaseScreenState extends ConsumerState<DatabaseScreen> {
                   ? GalleryView(
                       rows: rows,
                       properties: properties,
+                      pageTitles: pageTitles,
                       onRowTap: (row) => context.go('/pages/${row.pageId}'),
                     )
                   : TableView(

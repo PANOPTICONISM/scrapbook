@@ -731,6 +731,9 @@ class BlockWidgetState extends State<BlockWidget> {
           child: child,
         ),
       BlockType.divider => const SizedBox.shrink(),
+      // Database blocks are rendered by the BlockEditor directly, never by
+      // BlockWidget — this arm only exists to keep the switch exhaustive.
+      BlockType.database => const SizedBox.shrink(),
     };
   }
 

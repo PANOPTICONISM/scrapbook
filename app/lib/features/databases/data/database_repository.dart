@@ -145,6 +145,7 @@ class DatabaseRepository {
 
     await _db.into(_db.pagesTable).insert(PagesTableCompanion.insert(
           id: pageId,
+          parentId: Value(databaseId),
           title: const Value(''),
           position: const Value(1.0),
           createdAt: now,

@@ -8,12 +8,16 @@ class GalleryView extends StatelessWidget {
   final List<DatabaseRowModel> rows;
   final List<DatabaseProperty> properties;
   final void Function(DatabaseRowModel) onRowTap;
+  /// Optional map of pageId -> page title. Each row's title is taken from
+  /// the linked page, so editing the row page's title updates the card.
+  final Map<String, String> pageTitles;
 
   const GalleryView({
     super.key,
     required this.rows,
     required this.properties,
     required this.onRowTap,
+    this.pageTitles = const {},
   });
 
   @override
@@ -25,8 +29,7 @@ class GalleryView extends StatelessWidget {
       );
     }
 
-    final nameProperty = properties.firstOrNull;
-    final chipProperties = properties.skip(1).take(3).toList();
+    final chipProperties = properties.take(3).toList();
 
     final crossAxisCount = MediaQuery.of(context).size.width > 900 ? 4 :
                            MediaQuery.of(context).size.width > 600 ? 3 : 2;
@@ -42,7 +45,7 @@ class GalleryView extends StatelessWidget {
       itemCount: rows.length,
       itemBuilder: (context, i) => _GalleryCard(
         row: rows[i],
-        nameProperty: nameProperty,
+        title: pageTitles[rows[i].pageId] ?? '',
         chipProperties: chipProperties,
         allProperties: properties,
         onTap: () => onRowTap(rows[i]),
@@ -53,14 +56,14 @@ class GalleryView extends StatelessWidget {
 
 class _GalleryCard extends StatelessWidget {
   final DatabaseRowModel row;
-  final DatabaseProperty? nameProperty;
+  final String title;
   final List<DatabaseProperty> chipProperties;
   final List<DatabaseProperty> allProperties;
   final VoidCallback onTap;
 
   const _GalleryCard({
     required this.row,
-    required this.nameProperty,
+    required this.title,
     required this.chipProperties,
     required this.allProperties,
     required this.onTap,
@@ -68,9 +71,6 @@ class _GalleryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final title = nameProperty != null
-        ? _displayValue(row.values[nameProperty!.id], nameProperty!, allProperties)
-        : '';
 
     return Card(
       clipBehavior: Clip.antiAlias,
