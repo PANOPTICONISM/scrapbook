@@ -68,7 +68,15 @@ class _GalleryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final chips = <Widget>[];
     for (final prop in properties) {
-      final val = _displayValue(row.values[prop.id], prop);
+      final v = row.values[prop.id];
+      if (v is MultiSelectValue) {
+        for (final id in v.optionIds) {
+          final opt = prop.options.where((o) => o.id == id).firstOrNull;
+          if (opt != null) chips.add(_PropertyChip(label: opt.name, property: prop));
+        }
+        continue;
+      }
+      final val = _displayValue(v, prop);
       if (val.isEmpty) continue;
       chips.add(_PropertyChip(label: val, property: prop));
     }
@@ -117,7 +125,8 @@ class _PropertyChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Color? color;
-    if (property.type == PropertyType.select) {
+    if (property.type == PropertyType.select ||
+        property.type == PropertyType.multiSelect) {
       final option = property.options.where((o) => o.name == label).firstOrNull;
       if (option != null) {
         try {
@@ -146,5 +155,10 @@ String _displayValue(PropertyValue? value, DatabaseProperty property) {
     CheckboxValue(:final value) => value ? '✓' : '',
     SelectValue(:final optionId) =>
       property.options.where((o) => o.id == optionId).firstOrNull?.name ?? '',
+    MultiSelectValue(:final optionIds) => optionIds
+        .map((id) =>
+            property.options.where((o) => o.id == id).firstOrNull?.name ?? '')
+        .where((s) => s.isNotEmpty)
+        .join(', '),
   };
 }

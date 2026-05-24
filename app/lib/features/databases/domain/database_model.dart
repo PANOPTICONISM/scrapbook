@@ -42,7 +42,8 @@ enum PropertyType {
   number,
   date,
   checkbox,
-  select;
+  select,
+  multiSelect;
 
   static PropertyType fromString(String s) =>
       PropertyType.values.firstWhere((e) => e.name == s, orElse: () => PropertyType.text);

@@ -147,7 +147,7 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
         key: ValueKey(block.id),
         index: i,
         onDelete: deleteBlock,
-        child: EmbeddedDatabase(content: block.content),
+        child: EmbeddedDatabase(blockId: block.id, content: block.content),
       );
     }
 

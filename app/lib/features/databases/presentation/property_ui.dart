@@ -30,6 +30,7 @@ IconData propertyTypeIcon(PropertyType type) => switch (type) {
       PropertyType.date => Icons.calendar_today,
       PropertyType.checkbox => Icons.check_box_outline_blank,
       PropertyType.select => Icons.list,
+      PropertyType.multiSelect => Icons.label_outline,
     };
 
 String propertyTypeLabel(PropertyType type) => switch (type) {
@@ -38,6 +39,7 @@ String propertyTypeLabel(PropertyType type) => switch (type) {
       PropertyType.date => 'Date',
       PropertyType.checkbox => 'Checkbox',
       PropertyType.select => 'Select',
+      PropertyType.multiSelect => 'Multi-select',
     };
 
 /// Borderless inline editor for a property's name. Looks like plain text;
@@ -385,6 +387,245 @@ class _SelectPopupState extends ConsumerState<_SelectPopup> {
                                     : null,
                                 onTap: () => Navigator.pop(
                                     context, _SelectResult.option(o.id)),
+                              )),
+                          if (q.isNotEmpty && !exactExists)
+                            ListTile(
+                              dense: true,
+                              leading: const Icon(Icons.add, size: 16),
+                              title: Text('Create "$q"'),
+                              onTap: () => _create(q),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Inline multi-select editor: shows the chosen options as chips, opens an
+/// anchored popover to toggle options or create new ones.
+class MultiSelectValueField extends StatefulWidget {
+  final DatabaseProperty property;
+  final List<String> value;
+  final void Function(List<String>) onChanged;
+  final String emptyLabel;
+  final TextStyle? emptyStyle;
+  final EdgeInsetsGeometry padding;
+
+  const MultiSelectValueField({
+    super.key,
+    required this.property,
+    required this.value,
+    required this.onChanged,
+    this.emptyLabel = 'Empty',
+    this.emptyStyle,
+    this.padding = const EdgeInsets.symmetric(vertical: 6),
+  });
+
+  @override
+  State<MultiSelectValueField> createState() => _MultiSelectValueFieldState();
+}
+
+class _MultiSelectValueFieldState extends State<MultiSelectValueField> {
+  final GlobalKey _anchorKey = GlobalKey();
+
+  @override
+  Widget build(BuildContext context) {
+    final selected =
+        widget.property.options.where((o) => widget.value.contains(o.id)).toList();
+    return InkWell(
+      key: _anchorKey,
+      onTap: _open,
+      child: Padding(
+        padding: widget.padding,
+        child: selected.isEmpty
+            ? Text(
+                widget.emptyLabel,
+                style: widget.emptyStyle ??
+                    const TextStyle(fontSize: 14, color: Colors.grey),
+              )
+            : Wrap(
+                spacing: 4,
+                runSpacing: 4,
+                children: [for (final o in selected) OptionChip(option: o)],
+              ),
+      ),
+    );
+  }
+
+  Future<void> _open() async {
+    final box = _anchorKey.currentContext?.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (box == null || overlay == null) return;
+    final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
+    await showDialog<void>(
+      context: context,
+      barrierColor: Colors.transparent,
+      barrierDismissible: false,
+      builder: (_) => _MultiSelectPopup(
+        anchorTopLeft: topLeft,
+        anchorSize: box.size,
+        overlaySize: overlay.size,
+        property: widget.property,
+        value: widget.value,
+        onChanged: widget.onChanged,
+      ),
+    );
+  }
+}
+
+class _MultiSelectPopup extends ConsumerStatefulWidget {
+  final Offset anchorTopLeft;
+  final Size anchorSize;
+  final Size overlaySize;
+  final DatabaseProperty property;
+  final List<String> value;
+  final void Function(List<String>) onChanged;
+
+  const _MultiSelectPopup({
+    required this.anchorTopLeft,
+    required this.anchorSize,
+    required this.overlaySize,
+    required this.property,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  ConsumerState<_MultiSelectPopup> createState() => _MultiSelectPopupState();
+}
+
+class _MultiSelectPopupState extends ConsumerState<_MultiSelectPopup> {
+  String _query = '';
+  late List<SelectOption> _options = [...widget.property.options];
+  late final Set<String> _selected = {...widget.value};
+
+  static const double _cardWidth = 260;
+  static const double _maxHeight = 320;
+
+  void _toggle(String id) {
+    setState(() {
+      if (!_selected.remove(id)) _selected.add(id);
+    });
+    widget.onChanged(_selected.toList());
+  }
+
+  Future<void> _create(String name) async {
+    final id = const Uuid().v4();
+    final color = _optionPalette[_options.length % _optionPalette.length];
+    setState(() {
+      _options = [..._options, SelectOption(id: id, name: name, color: color)];
+      _selected.add(id);
+      _query = '';
+    });
+    await ref
+        .read(databaseRepositoryProvider)
+        .updateProperty(widget.property.id, options: _options);
+    ref.read(syncProvider.notifier).triggerDirtySync();
+    widget.onChanged(_selected.toList());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final q = _query.trim();
+    final filtered = q.isEmpty
+        ? _options
+        : _options
+            .where((o) => o.name.toLowerCase().contains(q.toLowerCase()))
+            .toList();
+    final exactExists =
+        _options.any((o) => o.name.toLowerCase() == q.toLowerCase());
+
+    var left = widget.anchorTopLeft.dx;
+    if (left + _cardWidth > widget.overlaySize.width - 8) {
+      left = widget.overlaySize.width - 8 - _cardWidth;
+    }
+    if (left < 8) left = 8;
+    var top = widget.anchorTopLeft.dy + widget.anchorSize.height + 4;
+    if (top + _maxHeight > widget.overlaySize.height - 8) {
+      top = (widget.overlaySize.height - 8 - _maxHeight)
+          .clamp(8.0, double.infinity);
+    }
+
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => Navigator.pop(context),
+          ),
+        ),
+        Positioned(
+          left: left,
+          top: top,
+          child: GestureDetector(
+            onTap: () {},
+            child: Material(
+              elevation: 8,
+              borderRadius: BorderRadius.circular(8),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  minWidth: _cardWidth,
+                  maxWidth: _cardWidth,
+                  maxHeight: _maxHeight,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: TextField(
+                        autofocus: true,
+                        onChanged: (v) => setState(() => _query = v),
+                        onSubmitted: (v) {
+                          final t = v.trim();
+                          if (t.isEmpty) return;
+                          final match = _options
+                              .where((o) =>
+                                  o.name.toLowerCase() == t.toLowerCase())
+                              .firstOrNull;
+                          if (match != null) {
+                            _toggle(match.id);
+                            setState(() => _query = '');
+                          } else {
+                            _create(t);
+                          }
+                        },
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          hintText: 'Search or create…',
+                          border: OutlineInputBorder(),
+                          contentPadding:
+                              EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        ),
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    Flexible(
+                      child: ListView(
+                        shrinkWrap: true,
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        children: [
+                          ...filtered.map((o) => ListTile(
+                                dense: true,
+                                leading: Icon(
+                                  _selected.contains(o.id)
+                                      ? Icons.check_box
+                                      : Icons.check_box_outline_blank,
+                                  size: 18,
+                                ),
+                                title: Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: OptionChip(option: o)),
+                                onTap: () => _toggle(o.id),
                               )),
                           if (q.isNotEmpty && !exactExists)
                             ListTile(

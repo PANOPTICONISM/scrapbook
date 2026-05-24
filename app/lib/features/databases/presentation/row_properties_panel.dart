@@ -230,6 +230,13 @@ class _PropertyRowState extends State<_PropertyRow> {
           onChanged: widget.onChanged,
           emptyStyle: const TextStyle(fontSize: 14, color: Colors.grey),
         );
+      case PropertyType.multiSelect:
+        return MultiSelectValueField(
+          property: widget.property,
+          value: value is MultiSelectValue ? value.optionIds : const [],
+          onChanged: widget.onChanged,
+          emptyStyle: const TextStyle(fontSize: 14, color: Colors.grey),
+        );
     }
   }
 }

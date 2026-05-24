@@ -9,20 +9,26 @@ import '../databases/domain/database_model.dart';
 import '../databases/domain/database_row_model.dart';
 import '../databases/presentation/database_view.dart';
 import '../databases/presentation/gallery_view.dart';
+import '../databases/presentation/property_ui.dart';
 import '../databases/presentation/table_view.dart';
 import '../pages/data/page_repository.dart';
 import '../pages/domain/page_model.dart';
 import '../sync/sync_provider.dart';
+import 'block_repository.dart';
 
 class EmbeddedDatabase extends ConsumerWidget {
+  final String blockId;
   final String content;
-  const EmbeddedDatabase({super.key, required this.content});
+  const EmbeddedDatabase({
+    super.key,
+    required this.blockId,
+    required this.content,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final parsed = parseDatabaseBlock(content);
-    final databaseId = parsed.databaseId;
-    final view = parsed.view;
+    final config = parseDatabaseBlock(content);
+    final databaseId = config.databaseId;
 
     if (databaseId.isEmpty) {
       return Container(
@@ -39,14 +45,19 @@ class EmbeddedDatabase extends ConsumerWidget {
       );
     }
     final repo = ref.watch(databaseRepositoryProvider);
-    final pagesAsync = ref.watch(allPagesProvider);
-    final allPages = pagesAsync.maybeWhen(
-      data: (pages) => pages,
-      orElse: () => const <PageModel>[],
-    );
-    final databasePage =
-        allPages.where((p) => p.id == databaseId).firstOrNull;
+    final allPages = ref.watch(allPagesProvider).maybeWhen(
+          data: (pages) => pages,
+          orElse: () => const <PageModel>[],
+        );
+    final databasePage = allPages.where((p) => p.id == databaseId).firstOrNull;
     final pageTitles = <String, String>{for (final p in allPages) p.id: p.title};
+
+    void writeConfig(DatabaseBlockConfig next) {
+      ref.read(blockRepositoryProvider).updateBlock(blockId, content: next.encode());
+      ref.read(syncProvider.notifier).triggerDirtySync();
+    }
+
+    final view = config.activeView;
 
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 6),
@@ -60,11 +71,26 @@ class EmbeddedDatabase extends ConsumerWidget {
           _Header(
             databaseId: databaseId,
             initialTitle: databasePage?.title ?? '',
-            onOpen: () =>
-                context.go('/pages/$databaseId/db?view=${view.name}'),
+            onOpen: () => context.go('/pages/$databaseId/db?view=${view.name}'),
             onAddRow: () async {
               await repo.createRow(databaseId);
               ref.read(syncProvider.notifier).triggerDirtySync();
+            },
+          ),
+          _ViewTabs(
+            views: config.views,
+            active: config.active,
+            onSelect: (i) => writeConfig(config.copyWith(active: i)),
+            onAdd: (v) => writeConfig(
+              config.copyWith(views: [...config.views, v], active: config.views.length),
+            ),
+            onRemove: (i) {
+              if (config.views.length <= 1) return;
+              final views = [...config.views]..removeAt(i);
+              final active = config.active >= views.length
+                  ? views.length - 1
+                  : config.active;
+              writeConfig(config.copyWith(views: views, active: active));
             },
           ),
           const Divider(height: 1),
@@ -110,6 +136,116 @@ class EmbeddedDatabase extends ConsumerWidget {
                 },
               );
             },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ViewTabs extends StatefulWidget {
+  final List<DatabaseView> views;
+  final int active;
+  final void Function(int) onSelect;
+  final void Function(DatabaseView) onAdd;
+  final void Function(int) onRemove;
+
+  const _ViewTabs({
+    required this.views,
+    required this.active,
+    required this.onSelect,
+    required this.onAdd,
+    required this.onRemove,
+  });
+
+  @override
+  State<_ViewTabs> createState() => _ViewTabsState();
+}
+
+class _ViewTabsState extends State<_ViewTabs> {
+  final GlobalKey _addKey = GlobalKey();
+
+  Future<void> _showAddMenu() async {
+    final pos = menuPositionFor(_addKey, context);
+    if (pos == null) return;
+    final result = await showMenu<DatabaseView>(
+      context: context,
+      position: pos,
+      items: [
+        for (final v in DatabaseView.values)
+          PopupMenuItem(
+            value: v,
+            child: Row(children: [
+              Icon(databaseViewIcon(v), size: 16, color: Colors.grey),
+              const SizedBox(width: 10),
+              Text(databaseViewLabel(v)),
+            ]),
+          ),
+      ],
+    );
+    if (result != null) widget.onAdd(result);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    return SizedBox(
+      height: 36,
+      child: Row(
+        children: [
+          Expanded(
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              itemCount: widget.views.length,
+              itemBuilder: (context, i) {
+                final v = widget.views[i];
+                final selected = i == widget.active;
+                return GestureDetector(
+                  onLongPress: widget.views.length > 1
+                      ? () => widget.onRemove(i)
+                      : null,
+                  child: InkWell(
+                    onTap: () => widget.onSelect(i),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      decoration: BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(
+                            width: 2,
+                            color: selected ? primary : Colors.transparent,
+                          ),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(databaseViewIcon(v),
+                              size: 14,
+                              color: selected ? primary : Colors.grey),
+                          const SizedBox(width: 4),
+                          Text(
+                            databaseViewLabel(v),
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: selected ? primary : Colors.grey,
+                              fontWeight:
+                                  selected ? FontWeight.w600 : FontWeight.w400,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          IconButton(
+            key: _addKey,
+            tooltip: 'Add view',
+            icon: const Icon(Icons.add, size: 16),
+            visualDensity: VisualDensity.compact,
+            onPressed: _showAddMenu,
           ),
         ],
       ),
@@ -172,7 +308,7 @@ class _HeaderState extends ConsumerState<_Header> {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
+      padding: const EdgeInsets.fromLTRB(12, 6, 6, 0),
       child: Row(
         children: [
           const Icon(Icons.storage, size: 16, color: Colors.grey),

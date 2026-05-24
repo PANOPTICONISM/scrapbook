@@ -47,3 +47,8 @@ class SelectValue extends PropertyValue {
   final String optionId;
   const SelectValue(this.optionId);
 }
+
+class MultiSelectValue extends PropertyValue {
+  final List<String> optionIds;
+  const MultiSelectValue(this.optionIds);
+}

@@ -312,6 +312,14 @@ class _DataCell extends StatelessWidget {
           emptyStyle: const TextStyle(fontSize: 13, color: Colors.grey),
           padding: EdgeInsets.zero,
         ),
+      PropertyType.multiSelect => MultiSelectValueField(
+          property: property,
+          value: value is MultiSelectValue ? value.optionIds : const [],
+          onChanged: onValueChanged,
+          emptyLabel: '—',
+          emptyStyle: const TextStyle(fontSize: 13, color: Colors.grey),
+          padding: EdgeInsets.zero,
+        ),
     };
   }
 }

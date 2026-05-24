@@ -119,6 +119,35 @@ class DatabaseRepository {
     ).watch().asyncMap((_) => _loadRowByPageId(pageId));
   }
 
+  Future<Map<String, PropertyType>> _propertyTypes(String databaseId) async {
+    final props = await (_db.select(_db.databasePropertiesTable)
+          ..where((p) => p.databaseId.equals(databaseId)))
+        .get();
+    return {for (final p in props) p.id: PropertyType.fromString(p.type)};
+  }
+
+  PropertyValue? _decodeValue(
+      DatabasePropertyValuesTableData v, PropertyType? type) {
+    if (v.valueText != null) return TextValue(v.valueText!);
+    if (v.valueNumber != null) return NumberValue(v.valueNumber!);
+    if (v.valueDate != null) {
+      return DateValue(DateTime.fromMillisecondsSinceEpoch(v.valueDate!));
+    }
+    if (v.valueBool != null) return CheckboxValue(v.valueBool!);
+    if (v.valueSelect != null) {
+      if (type == PropertyType.multiSelect) {
+        try {
+          final ids = (jsonDecode(v.valueSelect!) as List).cast<String>();
+          return ids.isEmpty ? null : MultiSelectValue(ids);
+        } catch (_) {
+          return SelectValue(v.valueSelect!);
+        }
+      }
+      return SelectValue(v.valueSelect!);
+    }
+    return null;
+  }
+
   Future<DatabaseRowModel?> _loadRowByPageId(String pageId) async {
     final row = await (_db.select(_db.databaseRowsTable)
           ..where((r) => r.pageId.equals(pageId))
@@ -127,6 +156,7 @@ class DatabaseRepository {
         .getSingleOrNull();
     if (row == null) return null;
 
+    final typeById = await _propertyTypes(row.databaseId);
     final values = await (_db.select(_db.databasePropertyValuesTable)
           ..where((v) => v.rowId.equals(row.id))
           ..orderBy([(v) => OrderingTerm.asc(v.updatedAt)]))
@@ -134,18 +164,8 @@ class DatabaseRepository {
 
     final valueMap = <String, PropertyValue>{};
     for (final v in values) {
-      if (v.valueText != null) {
-        valueMap[v.propertyId] = TextValue(v.valueText!);
-      } else if (v.valueNumber != null) {
-        valueMap[v.propertyId] = NumberValue(v.valueNumber!);
-      } else if (v.valueDate != null) {
-        valueMap[v.propertyId] =
-            DateValue(DateTime.fromMillisecondsSinceEpoch(v.valueDate!));
-      } else if (v.valueBool != null) {
-        valueMap[v.propertyId] = CheckboxValue(v.valueBool!);
-      } else if (v.valueSelect != null) {
-        valueMap[v.propertyId] = SelectValue(v.valueSelect!);
-      }
+      final decoded = _decodeValue(v, typeById[v.propertyId]);
+      if (decoded != null) valueMap[v.propertyId] = decoded;
     }
 
     return DatabaseRowModel(
@@ -177,6 +197,7 @@ class DatabaseRepository {
     if (rows.isEmpty) return const <DatabaseRowModel>[];
 
     final rowIds = rows.map((r) => r.id).toList();
+    final typeById = await _propertyTypes(databaseId);
     // Order oldest-first so that if duplicate rows exist for a (row, property),
     // the most recently updated one is assigned last and wins.
     final allValues = await (_db.select(_db.databasePropertyValuesTable)
@@ -186,19 +207,10 @@ class DatabaseRepository {
 
     final valuesByRow = <String, Map<String, PropertyValue>>{};
     for (final v in allValues) {
+      final decoded = _decodeValue(v, typeById[v.propertyId]);
+      if (decoded == null) continue;
       final m = valuesByRow.putIfAbsent(v.rowId, () => <String, PropertyValue>{});
-      if (v.valueText != null) {
-        m[v.propertyId] = TextValue(v.valueText!);
-      } else if (v.valueNumber != null) {
-        m[v.propertyId] = NumberValue(v.valueNumber!);
-      } else if (v.valueDate != null) {
-        m[v.propertyId] =
-            DateValue(DateTime.fromMillisecondsSinceEpoch(v.valueDate!));
-      } else if (v.valueBool != null) {
-        m[v.propertyId] = CheckboxValue(v.valueBool!);
-      } else if (v.valueSelect != null) {
-        m[v.propertyId] = SelectValue(v.valueSelect!);
-      }
+      m[v.propertyId] = decoded;
     }
 
     return rows
@@ -289,6 +301,9 @@ class DatabaseRepository {
         valueBool = value as bool?;
       case PropertyType.select:
         valueSelect = value as String?;
+      case PropertyType.multiSelect:
+        final ids = (value as List?)?.cast<String>() ?? const [];
+        valueSelect = ids.isEmpty ? null : jsonEncode(ids);
     }
 
     // There's no unique index on (rowId, propertyId), so upsert by hand:
