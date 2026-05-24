@@ -2,16 +2,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../../../features/pages/data/page_repository.dart';
 import '../../../features/sync/sync_provider.dart';
 import '../data/database_repository.dart';
 import '../domain/database_model.dart';
 import '../domain/database_row_model.dart';
 import 'property_ui.dart';
 
+const double _kTitleColWidth = 200;
+const double _kColWidth = 160;
+const double _kAddColWidth = 160;
+
 class TableView extends ConsumerWidget {
   final String databaseId;
   final List<DatabaseRowModel> rows;
   final List<DatabaseProperty> properties;
+  final Map<String, String> pageTitles;
   final void Function(DatabaseRowModel) onRowTap;
 
   const TableView({
@@ -19,85 +25,170 @@ class TableView extends ConsumerWidget {
     required this.databaseId,
     required this.rows,
     required this.properties,
+    this.pageTitles = const {},
     required this.onRowTap,
   });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final repo = ref.read(databaseRepositoryProvider);
-    return Column(
-      children: [
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              const SizedBox(width: 40),
-              ...properties.map((p) => _HeaderCell(
-                    property: p,
-                    onRename: (name) {
-                      repo.updateProperty(p.id, name: name);
-                      ref.read(syncProvider.notifier).triggerDirtySync();
-                    },
-                    onDelete: () {
-                      repo.deleteProperty(p.id);
-                      ref.read(syncProvider.notifier).triggerDirtySync();
-                    },
-                  )),
-              AddPropertyButton(databaseId: databaseId),
-            ],
-          ),
-        ),
-        const Divider(height: 1),
-        Expanded(
-          child: ListView.separated(
-            itemCount: rows.length + 1,
-            separatorBuilder: (_, _) => const Divider(height: 1),
-            itemBuilder: (context, i) {
-              if (i == rows.length) {
-                return TextButton.icon(
-                  onPressed: () async {
-                    await repo.createRow(databaseId);
-                    ref.read(syncProvider.notifier).triggerDirtySync();
-                  },
-                  icon: const Icon(Icons.add, size: 16),
-                  label: const Text('New row'),
-                );
-              }
-              final row = rows[i];
-              return SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 40,
-                      child: IconButton(
-                        icon: const Icon(Icons.open_in_new, size: 16),
-                        onPressed: () => onRowTap(row),
-                        tooltip: 'Open page',
-                      ),
-                    ),
-                    ...properties.map((prop) => _DataCell(
-                          row: row,
-                          property: prop,
-                          onValueChanged: (value) async {
-                            await repo.setValue(
-                              rowId: row.id,
-                              propertyId: prop.id,
-                              type: prop.type,
-                              value: value,
-                            );
-                            ref.read(syncProvider.notifier).triggerDirtySync();
-                          },
-                        )),
-                  ],
+    // Fixed total width so the whole table scrolls horizontally as one unit
+    // (header + every row share a single SingleChildScrollView).
+    final totalWidth =
+        40.0 + _kTitleColWidth + properties.length * _kColWidth + _kAddColWidth;
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: SizedBox(
+        width: totalWidth,
+        child: Column(
+          children: [
+            Row(
+              children: [
+                const SizedBox(width: 40),
+                const SizedBox(
+                  width: _kTitleColWidth,
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                    child: Text('Name',
+                        style: TextStyle(
+                            fontWeight: FontWeight.w600, fontSize: 13)),
+                  ),
                 ),
-              );
-            },
-          ),
+                ...properties.map((p) => _HeaderCell(
+                      property: p,
+                      onRename: (name) {
+                        repo.updateProperty(p.id, name: name);
+                        ref.read(syncProvider.notifier).triggerDirtySync();
+                      },
+                      onDelete: () {
+                        repo.deleteProperty(p.id);
+                        ref.read(syncProvider.notifier).triggerDirtySync();
+                      },
+                    )),
+                AddPropertyButton(databaseId: databaseId),
+              ],
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView.separated(
+                itemCount: rows.length + 1,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (context, i) {
+                  if (i == rows.length) {
+                    return Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: () async {
+                          await repo.createRow(databaseId);
+                          ref.read(syncProvider.notifier).triggerDirtySync();
+                        },
+                        icon: const Icon(Icons.add, size: 16),
+                        label: const Text('New row'),
+                      ),
+                    );
+                  }
+                  final row = rows[i];
+                  return Row(
+                    children: [
+                      SizedBox(
+                        width: 40,
+                        child: IconButton(
+                          icon: const Icon(Icons.open_in_new, size: 16),
+                          onPressed: () => onRowTap(row),
+                          tooltip: 'Open page',
+                        ),
+                      ),
+                      SizedBox(
+                        width: _kTitleColWidth,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: _TitleCell(
+                            pageId: row.pageId,
+                            title: pageTitles[row.pageId] ?? '',
+                          ),
+                        ),
+                      ),
+                      ...properties.map((prop) => _DataCell(
+                            row: row,
+                            property: prop,
+                            onValueChanged: (value) async {
+                              await repo.setValue(
+                                rowId: row.id,
+                                propertyId: prop.id,
+                                type: prop.type,
+                                value: value,
+                              );
+                              ref
+                                  .read(syncProvider.notifier)
+                                  .triggerDirtySync();
+                            },
+                          )),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
+}
+
+class _TitleCell extends ConsumerStatefulWidget {
+  final String pageId;
+  final String title;
+  const _TitleCell({required this.pageId, required this.title});
+
+  @override
+  ConsumerState<_TitleCell> createState() => _TitleCellState();
+}
+
+class _TitleCellState extends ConsumerState<_TitleCell> {
+  late final TextEditingController _ctrl;
+  final FocusNode _focus = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.title);
+  }
+
+  @override
+  void didUpdateWidget(_TitleCell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.title != _ctrl.text && !_focus.hasFocus) {
+      _ctrl.text = widget.title;
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _save(String value) {
+    ref.read(pageRepositoryProvider).updateTitle(widget.pageId, value);
+    ref.read(syncProvider.notifier).triggerDirtySync();
+  }
+
+  @override
+  Widget build(BuildContext context) => TextField(
+        controller: _ctrl,
+        focusNode: _focus,
+        onSubmitted: _save,
+        onTapOutside: (_) => _save(_ctrl.text),
+        decoration: const InputDecoration(
+          isDense: true,
+          border: InputBorder.none,
+          hintText: 'Untitled',
+          hintStyle: TextStyle(color: Colors.grey),
+        ),
+        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+      );
 }
 
 class _HeaderCell extends StatefulWidget {
@@ -116,14 +207,13 @@ class _HeaderCell extends StatefulWidget {
 }
 
 class _HeaderCellState extends State<_HeaderCell> {
-  static const double _width = 160;
   final GlobalKey _anchorKey = GlobalKey();
 
   @override
   Widget build(BuildContext context) {
     final p = widget.property;
     return SizedBox(
-      width: _width,
+      width: _kColWidth,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
         child: Row(
@@ -177,7 +267,6 @@ class _DataCell extends StatelessWidget {
   final DatabaseRowModel row;
   final DatabaseProperty property;
   final void Function(dynamic) onValueChanged;
-  static const double _width = 160;
 
   const _DataCell({
     required this.row,
@@ -189,7 +278,7 @@ class _DataCell extends StatelessWidget {
   Widget build(BuildContext context) {
     final value = row.values[property.id];
     return SizedBox(
-      width: _width,
+      width: _kColWidth,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         child: _buildCell(context, value),

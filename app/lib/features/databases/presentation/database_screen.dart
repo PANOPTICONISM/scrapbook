@@ -156,6 +156,7 @@ class _DatabaseScreenState extends ConsumerState<DatabaseScreen> {
                       databaseId: widget.pageId,
                       rows: rows,
                       properties: properties,
+                      pageTitles: pageTitles,
                       onRowTap: (row) => context.go('/pages/${row.pageId}'),
                     );
             },
