@@ -7,17 +7,23 @@ import 'package:go_router/go_router.dart';
 import '../databases/data/database_repository.dart';
 import '../databases/domain/database_model.dart';
 import '../databases/domain/database_row_model.dart';
+import '../databases/presentation/database_view.dart';
 import '../databases/presentation/gallery_view.dart';
+import '../databases/presentation/table_view.dart';
 import '../pages/data/page_repository.dart';
 import '../pages/domain/page_model.dart';
 import '../sync/sync_provider.dart';
 
 class EmbeddedDatabase extends ConsumerWidget {
-  final String databaseId;
-  const EmbeddedDatabase({super.key, required this.databaseId});
+  final String content;
+  const EmbeddedDatabase({super.key, required this.content});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final parsed = parseDatabaseBlock(content);
+    final databaseId = parsed.databaseId;
+    final view = parsed.view;
+
     if (databaseId.isEmpty) {
       return Container(
         margin: const EdgeInsets.symmetric(vertical: 6),
@@ -54,7 +60,8 @@ class EmbeddedDatabase extends ConsumerWidget {
           _Header(
             databaseId: databaseId,
             initialTitle: databasePage?.title ?? '',
-            onOpen: () => context.go('/pages/$databaseId/db'),
+            onOpen: () =>
+                context.go('/pages/$databaseId/db?view=${view.name}'),
             onAddRow: () async {
               await repo.createRow(databaseId);
               ref.read(syncProvider.notifier).triggerDirtySync();
@@ -83,12 +90,22 @@ class EmbeddedDatabase extends ConsumerWidget {
                   final rows = rowsSnap.data ?? const <DatabaseRowModel>[];
                   return SizedBox(
                     height: rows.isEmpty ? 120 : 320,
-                    child: GalleryView(
-                      rows: rows,
-                      properties: properties,
-                      pageTitles: pageTitles,
-                      onRowTap: (row) => context.go('/pages/${row.pageId}'),
-                    ),
+                    child: view == DatabaseView.table
+                        ? TableView(
+                            databaseId: databaseId,
+                            rows: rows,
+                            properties: properties,
+                            pageTitles: pageTitles,
+                            onRowTap: (row) =>
+                                context.go('/pages/${row.pageId}'),
+                          )
+                        : GalleryView(
+                            rows: rows,
+                            properties: properties,
+                            pageTitles: pageTitles,
+                            onRowTap: (row) =>
+                                context.go('/pages/${row.pageId}'),
+                          ),
                   );
                 },
               );
@@ -158,7 +175,7 @@ class _HeaderState extends ConsumerState<_Header> {
       padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
       child: Row(
         children: [
-          const Icon(Icons.grid_view, size: 16, color: Colors.grey),
+          const Icon(Icons.storage, size: 16, color: Colors.grey),
           const SizedBox(width: 8),
           Expanded(
             child: TextField(

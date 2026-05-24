@@ -10,21 +10,25 @@ import '../../../features/databases/domain/database_row_model.dart';
 import '../../../features/pages/data/page_repository.dart';
 import '../../../features/pages/domain/page_model.dart';
 import '../../../features/sync/sync_provider.dart';
+import 'database_view.dart';
 import 'gallery_view.dart';
 import 'table_view.dart';
 
-enum DatabaseView { gallery, table }
-
 class DatabaseScreen extends ConsumerStatefulWidget {
   final String pageId;
-  const DatabaseScreen({super.key, required this.pageId});
+  final DatabaseView initialView;
+  const DatabaseScreen({
+    super.key,
+    required this.pageId,
+    this.initialView = DatabaseView.gallery,
+  });
 
   @override
   ConsumerState<DatabaseScreen> createState() => _DatabaseScreenState();
 }
 
 class _DatabaseScreenState extends ConsumerState<DatabaseScreen> {
-  DatabaseView _currentView = DatabaseView.gallery;
+  late final DatabaseView _currentView = widget.initialView;
   late final TextEditingController _titleCtrl;
   final FocusNode _titleFocus = FocusNode();
   Timer? _titleSaveTimer;
@@ -105,22 +109,6 @@ class _DatabaseScreenState extends ConsumerState<DatabaseScreen> {
           ),
         ),
         actions: [
-          IconButton(
-            tooltip: 'Gallery view',
-            icon: const Icon(Icons.grid_view),
-            color: _currentView == DatabaseView.gallery
-                ? Theme.of(context).colorScheme.primary
-                : null,
-            onPressed: () => setState(() => _currentView = DatabaseView.gallery),
-          ),
-          IconButton(
-            tooltip: 'Table view',
-            icon: const Icon(Icons.table_chart),
-            color: _currentView == DatabaseView.table
-                ? Theme.of(context).colorScheme.primary
-                : null,
-            onPressed: () => setState(() => _currentView = DatabaseView.table),
-          ),
           IconButton(
             tooltip: 'Add row',
             icon: const Icon(Icons.add),

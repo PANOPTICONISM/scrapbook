@@ -3,9 +3,13 @@ import 'package:flutter/material.dart';
 import 'block_types.dart';
 
 List<BlockType> filterSlashOptions(String query) {
+  // `database` is the stored/rendered type; the menu offers Table/Gallery
+  // instead, which both create a database with the chosen initial view.
+  final options =
+      BlockType.values.where((t) => t != BlockType.database).toList();
   final q = query.toLowerCase();
-  if (q.isEmpty) return BlockType.values;
-  return BlockType.values
+  if (q.isEmpty) return options;
+  return options
       .where((t) => t.label.toLowerCase().contains(q) || t.value.contains(q))
       .toList();
 }

@@ -2,6 +2,7 @@ import 'package:go_router/go_router.dart';
 
 import '../features/auth/token_storage.dart';
 import '../features/databases/presentation/database_screen.dart';
+import '../features/databases/presentation/database_view.dart';
 import '../features/pages/presentation/page_editor_screen.dart';
 import '../features/pages/presentation/page_list_screen.dart';
 import '../features/pages/presentation/setup_screen.dart';
@@ -38,6 +39,9 @@ final router = GoRouter(
               path: ':pageId/db',
               builder: (context, state) => DatabaseScreen(
                 pageId: state.pathParameters['pageId']!,
+                initialView: databaseViewFromName(
+                  state.uri.queryParameters['view'],
+                ),
               ),
             ),
           ],

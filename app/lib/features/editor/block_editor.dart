@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../shared/widgets/drag_handle.dart';
+import '../databases/presentation/database_view.dart';
 import '../pages/data/page_repository.dart';
 import '../sync/sync_provider.dart';
 import 'block_repository.dart';
@@ -146,7 +147,7 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
         key: ValueKey(block.id),
         index: i,
         onDelete: deleteBlock,
-        child: EmbeddedDatabase(databaseId: block.content),
+        child: EmbeddedDatabase(content: block.content),
       );
     }
 
@@ -353,19 +354,29 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
 
     final repo = ref.read(blockRepositoryProvider);
 
-    if (type == BlockType.database) {
+    final isDatabase = type == BlockType.databaseTable ||
+        type == BlockType.databaseGallery;
+
+    if (isDatabase) {
       final pageRepo = ref.read(pageRepositoryProvider);
       final dbPage = await pageRepo.createPage(
         isDatabase: true,
         parentId: widget.pageId,
       );
-      await repo.updateBlock(blockId, type: type, content: dbPage.id);
+      final view = type == BlockType.databaseTable
+          ? DatabaseView.table
+          : DatabaseView.gallery;
+      await repo.updateBlock(
+        blockId,
+        type: BlockType.database,
+        content: encodeDatabaseBlock(dbPage.id, view),
+      );
     } else {
       await repo.updateBlock(blockId, type: type, content: '');
     }
 
     ref.read(syncProvider.notifier).triggerDirtySync();
-    if (type != BlockType.database) _focusFor(blockId).requestFocus();
+    if (!isDatabase) _focusFor(blockId).requestFocus();
   }
 }
 

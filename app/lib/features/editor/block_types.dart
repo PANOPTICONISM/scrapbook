@@ -11,7 +11,11 @@ enum BlockType {
   quote,
   code,
   divider,
-  database;
+  database,
+  // Slash-menu-only entries: both create a `database` block, differing only in
+  // the initial view. They are never stored as a block type.
+  databaseTable,
+  databaseGallery;
 
   String get value => switch (this) {
         BlockType.paragraph => 'paragraph',
@@ -25,6 +29,8 @@ enum BlockType {
         BlockType.code => 'code',
         BlockType.divider => 'divider',
         BlockType.database => 'database',
+        BlockType.databaseTable => 'database_table',
+        BlockType.databaseGallery => 'database_gallery',
       };
 
   static BlockType fromString(String s) => switch (s) {
@@ -53,6 +59,8 @@ enum BlockType {
         BlockType.code => 'Code',
         BlockType.divider => 'Divider',
         BlockType.database => 'Database',
+        BlockType.databaseTable => 'Table',
+        BlockType.databaseGallery => 'Gallery',
       };
 
   IconData get icon => switch (this) {
@@ -67,6 +75,8 @@ enum BlockType {
         BlockType.code => Icons.code,
         BlockType.divider => Icons.horizontal_rule,
         BlockType.database => Icons.grid_view,
+        BlockType.databaseTable => Icons.table_chart,
+        BlockType.databaseGallery => Icons.grid_view,
       };
 
   String get hint => switch (this) {
