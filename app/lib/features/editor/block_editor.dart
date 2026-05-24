@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../shared/widgets/drag_handle.dart';
 import '../pages/data/page_repository.dart';
 import '../sync/sync_provider.dart';
 import 'block_repository.dart';
@@ -430,34 +431,13 @@ class _DraggableBlockState extends State<_DraggableBlock> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SizedBox(
-              width: 24,
-              child: AnimatedOpacity(
-                opacity: _hovered ? 0.6 : 0.0,
-                duration: const Duration(milliseconds: 120),
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  // The drag handle is also a menu opener: tap shows actions,
-                  // drag reorders. ReorderableDragStartListener only consumes
-                  // the gesture once the pointer moves, leaving pure taps for
-                  // the GestureDetector.
-                  child: GestureDetector(
-                    onTapUp: (_) => _showMenu(),
-                    child: ReorderableDragStartListener(
-                      index: widget.index,
-                      child: MouseRegion(
-                        cursor: SystemMouseCursors.grab,
-                        child: Icon(
-                          key: _handleKey,
-                          Icons.drag_indicator,
-                          size: 18,
-                          color: Colors.grey,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+            // Tap the handle to open the block menu, drag it to reorder.
+            DragHandle(
+              index: widget.index,
+              visible: _hovered,
+              padding: const EdgeInsets.only(top: 6),
+              onTap: _showMenu,
+              handleKey: _handleKey,
             ),
             Expanded(child: widget.child),
           ],

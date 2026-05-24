@@ -13,6 +13,18 @@ final databaseRepositoryProvider = Provider<DatabaseRepository>(
   (ref) => DatabaseRepository(ref.watch(appDatabaseProvider)),
 );
 
+/// Cached so the underlying stream stays stable across widget rebuilds
+/// (recreating the stream each build makes dependent StreamBuilders flash).
+final rowByPageIdProvider =
+    StreamProvider.family<DatabaseRowModel?, String>((ref, pageId) {
+  return ref.watch(databaseRepositoryProvider).watchRowByPageId(pageId);
+});
+
+final databasePropertiesProvider =
+    StreamProvider.family<List<DatabaseProperty>, String>((ref, databaseId) {
+  return ref.watch(databaseRepositoryProvider).watchProperties(databaseId);
+});
+
 class DatabaseRepository {
   final AppDatabase _db;
   final _uuid = const Uuid();
@@ -75,6 +87,21 @@ class DatabaseRepository {
     ));
   }
 
+  Future<void> reorderProperties(List<String> orderedIds) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _db.transaction(() async {
+      for (var i = 0; i < orderedIds.length; i++) {
+        await (_db.update(_db.databasePropertiesTable)
+              ..where((p) => p.id.equals(orderedIds[i])))
+            .write(DatabasePropertiesTableCompanion(
+          position: Value(i.toDouble()),
+          updatedAt: Value(now),
+          isDirty: const Value(true),
+        ));
+      }
+    });
+  }
+
   Future<void> deleteProperty(String id) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     await (_db.update(_db.databasePropertiesTable)..where((p) => p.id.equals(id)))
@@ -101,7 +128,8 @@ class DatabaseRepository {
     if (row == null) return null;
 
     final values = await (_db.select(_db.databasePropertyValuesTable)
-          ..where((v) => v.rowId.equals(row.id)))
+          ..where((v) => v.rowId.equals(row.id))
+          ..orderBy([(v) => OrderingTerm.asc(v.updatedAt)]))
         .get();
 
     final valueMap = <String, PropertyValue>{};
@@ -149,8 +177,11 @@ class DatabaseRepository {
     if (rows.isEmpty) return const <DatabaseRowModel>[];
 
     final rowIds = rows.map((r) => r.id).toList();
+    // Order oldest-first so that if duplicate rows exist for a (row, property),
+    // the most recently updated one is assigned last and wins.
     final allValues = await (_db.select(_db.databasePropertyValuesTable)
-          ..where((v) => v.rowId.isIn(rowIds)))
+          ..where((v) => v.rowId.isIn(rowIds))
+          ..orderBy([(v) => OrderingTerm.asc(v.updatedAt)]))
         .get();
 
     final valuesByRow = <String, Map<String, PropertyValue>>{};
@@ -240,7 +271,6 @@ class DatabaseRepository {
     required dynamic value,
   }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
-    final id = _uuid.v4();
 
     String? valueText;
     double? valueNumber;
@@ -261,21 +291,44 @@ class DatabaseRepository {
         valueSelect = value as String?;
     }
 
-    await _db.into(_db.databasePropertyValuesTable).insertOnConflictUpdate(
-          DatabasePropertyValuesTableCompanion.insert(
-            id: id,
-            rowId: rowId,
-            propertyId: propertyId,
-            valueText: Value(valueText),
-            valueNumber: Value(valueNumber),
-            valueDate: Value(valueDate),
-            valueBool: Value(valueBool),
-            valueSelect: Value(valueSelect),
-            createdAt: now,
-            updatedAt: now,
-            isDirty: const Value(true),
-          ),
-        );
+    // There's no unique index on (rowId, propertyId), so upsert by hand:
+    // reuse the existing value row if there is one, otherwise insert a new one.
+    final existing = await (_db.select(_db.databasePropertyValuesTable)
+          ..where((v) => v.rowId.equals(rowId))
+          ..where((v) => v.propertyId.equals(propertyId))
+          ..orderBy([(v) => OrderingTerm.desc(v.updatedAt)])
+          ..limit(1))
+        .getSingleOrNull();
+
+    if (existing != null) {
+      await (_db.update(_db.databasePropertyValuesTable)
+            ..where((v) => v.id.equals(existing.id)))
+          .write(DatabasePropertyValuesTableCompanion(
+        valueText: Value(valueText),
+        valueNumber: Value(valueNumber),
+        valueDate: Value(valueDate),
+        valueBool: Value(valueBool),
+        valueSelect: Value(valueSelect),
+        updatedAt: Value(now),
+        isDirty: const Value(true),
+      ));
+    } else {
+      await _db.into(_db.databasePropertyValuesTable).insert(
+            DatabasePropertyValuesTableCompanion.insert(
+              id: _uuid.v4(),
+              rowId: rowId,
+              propertyId: propertyId,
+              valueText: Value(valueText),
+              valueNumber: Value(valueNumber),
+              valueDate: Value(valueDate),
+              valueBool: Value(valueBool),
+              valueSelect: Value(valueSelect),
+              createdAt: now,
+              updatedAt: now,
+              isDirty: const Value(true),
+            ),
+          );
+    }
 
     await (_db.update(_db.databaseRowsTable)..where((r) => r.id.equals(rowId)))
         .write(DatabaseRowsTableCompanion(

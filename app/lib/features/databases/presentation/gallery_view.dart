@@ -29,8 +29,6 @@ class GalleryView extends StatelessWidget {
       );
     }
 
-    final chipProperties = properties.take(3).toList();
-
     final crossAxisCount = MediaQuery.of(context).size.width > 900 ? 4 :
                            MediaQuery.of(context).size.width > 600 ? 3 : 2;
 
@@ -46,8 +44,7 @@ class GalleryView extends StatelessWidget {
       itemBuilder: (context, i) => _GalleryCard(
         row: rows[i],
         title: pageTitles[rows[i].pageId] ?? '',
-        chipProperties: chipProperties,
-        allProperties: properties,
+        properties: properties,
         onTap: () => onRowTap(rows[i]),
       ),
     );
@@ -57,20 +54,24 @@ class GalleryView extends StatelessWidget {
 class _GalleryCard extends StatelessWidget {
   final DatabaseRowModel row;
   final String title;
-  final List<DatabaseProperty> chipProperties;
-  final List<DatabaseProperty> allProperties;
+  final List<DatabaseProperty> properties;
   final VoidCallback onTap;
 
   const _GalleryCard({
     required this.row,
     required this.title,
-    required this.chipProperties,
-    required this.allProperties,
+    required this.properties,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    final chips = <Widget>[];
+    for (final prop in properties) {
+      final val = _displayValue(row.values[prop.id], prop);
+      if (val.isEmpty) continue;
+      chips.add(_PropertyChip(label: val, property: prop));
+    }
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -87,15 +88,17 @@ class _GalleryCard extends StatelessWidget {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
-              const Spacer(),
-              Wrap(
-                spacing: 4,
-                runSpacing: 4,
-                children: chipProperties.map((prop) {
-                  final val = _displayValue(row.values[prop.id], prop, allProperties);
-                  if (val.isEmpty) return const SizedBox.shrink();
-                  return _PropertyChip(label: val, property: prop, allProperties: allProperties);
-                }).toList(),
+              Expanded(
+                child: ClipRect(
+                  child: Align(
+                    alignment: Alignment.bottomLeft,
+                    child: Wrap(
+                      spacing: 4,
+                      runSpacing: 4,
+                      children: chips,
+                    ),
+                  ),
+                ),
               ),
             ],
           ),
@@ -108,9 +111,8 @@ class _GalleryCard extends StatelessWidget {
 class _PropertyChip extends StatelessWidget {
   final String label;
   final DatabaseProperty property;
-  final List<DatabaseProperty> allProperties;
 
-  const _PropertyChip({required this.label, required this.property, required this.allProperties});
+  const _PropertyChip({required this.label, required this.property});
 
   @override
   Widget build(BuildContext context) {
@@ -135,7 +137,7 @@ class _PropertyChip extends StatelessWidget {
   }
 }
 
-String _displayValue(PropertyValue? value, DatabaseProperty property, List<DatabaseProperty> allProperties) {
+String _displayValue(PropertyValue? value, DatabaseProperty property) {
   if (value == null) return '';
   return switch (value) {
     TextValue(:final value) => value,

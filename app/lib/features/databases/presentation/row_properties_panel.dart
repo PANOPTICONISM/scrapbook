@@ -2,144 +2,236 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../../../shared/widgets/drag_handle.dart';
 import '../../sync/sync_provider.dart';
 import '../data/database_repository.dart';
 import '../domain/database_model.dart';
 import '../domain/database_row_model.dart';
+import 'property_ui.dart';
 
 /// Renders editable property fields at the top of a page that belongs to
 /// a database row. Mirrors Notion's row-page layout: a list of
 /// [icon] [property name] [value editor] rows above the page content.
-class RowPropertiesPanel extends ConsumerWidget {
+class RowPropertiesPanel extends ConsumerStatefulWidget {
   final String pageId;
   const RowPropertiesPanel({super.key, required this.pageId});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final repo = ref.watch(databaseRepositoryProvider);
-    return StreamBuilder<DatabaseRowModel?>(
-      stream: repo.watchRowByPageId(pageId),
-      builder: (context, rowSnap) {
-        final row = rowSnap.data;
-        if (row == null) return const SizedBox.shrink();
-        return StreamBuilder<List<DatabaseProperty>>(
-          stream: repo.watchProperties(row.databaseId),
-          builder: (context, propsSnap) {
-            final properties = propsSnap.data ?? const <DatabaseProperty>[];
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  ...properties.map((p) => _PropertyRow(
-                        property: p,
-                        value: row.values[p.id],
-                        onChanged: (v) async {
-                          await repo.setValue(
-                            rowId: row.id,
-                            propertyId: p.id,
-                            type: p.type,
-                            value: v,
-                          );
-                          ref.read(syncProvider.notifier).triggerDirtySync();
-                        },
-                        onRename: (name) async {
-                          await repo.updateProperty(p.id, name: name);
-                          ref.read(syncProvider.notifier).triggerDirtySync();
-                        },
-                      )),
-                  _AddPropertyButton(databaseId: row.databaseId),
-                  const SizedBox(height: 8),
-                  const Divider(height: 1),
-                ],
-              ),
+  ConsumerState<RowPropertiesPanel> createState() => _RowPropertiesPanelState();
+}
+
+class _RowPropertiesPanelState extends ConsumerState<RowPropertiesPanel> {
+  // Optimistic order applied the instant a drag ends, so the row lands in its
+  // new slot immediately instead of snapping back while the DB write +
+  // stream round-trips. Reset to the stream's order when membership changes.
+  List<String>? _orderIds;
+
+  List<DatabaseProperty> _applyLocalOrder(List<DatabaseProperty> incoming) {
+    final byId = {for (final p in incoming) p.id: p};
+    final ids = _orderIds;
+    if (ids != null &&
+        ids.length == byId.length &&
+        ids.every(byId.containsKey)) {
+      return [for (final id in ids) byId[id]!];
+    }
+    _orderIds = null;
+    return incoming;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final row = ref
+        .watch(rowByPageIdProvider(widget.pageId))
+        .maybeWhen(data: (r) => r, orElse: () => null);
+    if (row == null) return const SizedBox.shrink();
+
+    final repo = ref.read(databaseRepositoryProvider);
+    final incoming =
+        ref.watch(databasePropertiesProvider(row.databaseId)).maybeWhen(
+              data: (p) => p,
+              orElse: () => const <DatabaseProperty>[],
             );
-          },
-        );
-      },
+    final properties = _applyLocalOrder(incoming);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (properties.isNotEmpty)
+            ReorderableListView(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              buildDefaultDragHandles: false,
+              proxyDecorator: (child, _, _) =>
+                  Material(color: Colors.transparent, child: child),
+              onReorder: (oldIndex, newIndex) {
+                if (newIndex > oldIndex) newIndex -= 1;
+                final ids = properties.map((p) => p.id).toList();
+                ids.insert(newIndex, ids.removeAt(oldIndex));
+                setState(() => _orderIds = ids);
+                repo.reorderProperties(ids);
+                ref.read(syncProvider.notifier).triggerDirtySync();
+              },
+              children: [
+                for (var i = 0; i < properties.length; i++)
+                  _PropertyRow(
+                    key: ValueKey(properties[i].id),
+                    index: i,
+                    property: properties[i],
+                    value: row.values[properties[i].id],
+                    onChanged: (v) async {
+                      await repo.setValue(
+                        rowId: row.id,
+                        propertyId: properties[i].id,
+                        type: properties[i].type,
+                        value: v,
+                      );
+                      ref.read(syncProvider.notifier).triggerDirtySync();
+                    },
+                    onRename: (name) async {
+                      await repo.updateProperty(properties[i].id, name: name);
+                      ref.read(syncProvider.notifier).triggerDirtySync();
+                    },
+                    onDelete: () async {
+                      await repo.deleteProperty(properties[i].id);
+                      ref.read(syncProvider.notifier).triggerDirtySync();
+                    },
+                  ),
+              ],
+            ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: AddPropertyButton(databaseId: row.databaseId),
+          ),
+          const SizedBox(height: 8),
+          const Divider(height: 1),
+        ],
+      ),
     );
   }
 }
 
-class _PropertyRow extends StatelessWidget {
+class _PropertyRow extends StatefulWidget {
   final DatabaseProperty property;
   final PropertyValue? value;
   final void Function(dynamic) onChanged;
   final void Function(String) onRename;
+  final VoidCallback onDelete;
+  final int index;
 
   const _PropertyRow({
+    super.key,
     required this.property,
     required this.value,
     required this.onChanged,
     required this.onRename,
+    required this.onDelete,
+    required this.index,
   });
 
   @override
+  State<_PropertyRow> createState() => _PropertyRowState();
+}
+
+class _PropertyRowState extends State<_PropertyRow> {
+  bool _hovered = false;
+  final GlobalKey _handleKey = GlobalKey();
+
+  Future<void> _showMenu() async {
+    final pos = menuPositionFor(_handleKey, context);
+    if (pos == null) return;
+    final result = await showMenu<String>(
+      context: context,
+      position: pos,
+      items: const [
+        PopupMenuItem(
+          value: 'delete',
+          child: Row(children: [
+            Icon(Icons.delete_outline, size: 16, color: Colors.red),
+            SizedBox(width: 8),
+            Text('Delete', style: TextStyle(color: Colors.red)),
+          ]),
+        ),
+      ],
+    );
+    if (result == 'delete') widget.onDelete();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          SizedBox(
-            width: 180,
-            child: Row(
-              children: [
-                Icon(_typeIcon(property.type), size: 14, color: Colors.grey),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _PropertyNameField(
-                    initial: property.name,
-                    onSubmit: onRename,
-                  ),
-                ),
-              ],
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Tap the handle for options (delete), drag it to reorder.
+            DragHandle(
+              index: widget.index,
+              visible: _hovered,
+              width: 20,
+              iconSize: 16,
+              onTap: _showMenu,
+              handleKey: _handleKey,
             ),
-          ),
-          Expanded(child: _editor()),
-        ],
+            SizedBox(
+              width: 160,
+              child: Row(
+                children: [
+                  Icon(propertyTypeIcon(widget.property.type),
+                      size: 14, color: Colors.grey),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: PropertyNameField(
+                      initial: widget.property.name,
+                      onSubmit: widget.onRename,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(child: _editor()),
+          ],
+        ),
       ),
     );
   }
 
   Widget _editor() {
-    switch (property.type) {
+    final value = widget.value;
+    switch (widget.property.type) {
       case PropertyType.text:
         return _TextEditor(
-          value: value is TextValue ? (value as TextValue).value : '',
-          onChanged: onChanged,
+          value: value is TextValue ? value.value : '',
+          onChanged: widget.onChanged,
         );
       case PropertyType.number:
         return _NumberEditor(
-          value: value is NumberValue ? (value as NumberValue).value : null,
-          onChanged: onChanged,
+          value: value is NumberValue ? value.value : null,
+          onChanged: widget.onChanged,
         );
       case PropertyType.date:
         return _DateEditor(
-          value: value is DateValue ? (value as DateValue).value : null,
-          onChanged: onChanged,
+          value: value is DateValue ? value.value : null,
+          onChanged: widget.onChanged,
         );
       case PropertyType.checkbox:
         return _CheckboxEditor(
-          value: value is CheckboxValue ? (value as CheckboxValue).value : false,
-          onChanged: onChanged,
+          value: value is CheckboxValue ? value.value : false,
+          onChanged: widget.onChanged,
         );
       case PropertyType.select:
-        return _SelectEditor(
-          value: value is SelectValue ? (value as SelectValue).optionId : null,
-          options: property.options,
-          onChanged: onChanged,
+        return SelectValueField(
+          property: widget.property,
+          value: value is SelectValue ? value.optionId : null,
+          onChanged: widget.onChanged,
+          emptyStyle: const TextStyle(fontSize: 14, color: Colors.grey),
         );
     }
   }
-
-  static IconData _typeIcon(PropertyType type) => switch (type) {
-        PropertyType.text => Icons.text_fields,
-        PropertyType.number => Icons.numbers,
-        PropertyType.date => Icons.calendar_today,
-        PropertyType.checkbox => Icons.check_box_outline_blank,
-        PropertyType.select => Icons.list,
-      };
 }
 
 class _TextEditor extends StatefulWidget {
@@ -295,231 +387,3 @@ class _CheckboxEditor extends StatelessWidget {
       );
 }
 
-class _SelectEditor extends StatefulWidget {
-  final String? value;
-  final List<SelectOption> options;
-  final void Function(String?) onChanged;
-
-  const _SelectEditor({
-    required this.value,
-    required this.options,
-    required this.onChanged,
-  });
-
-  @override
-  State<_SelectEditor> createState() => _SelectEditorState();
-}
-
-class _SelectEditorState extends State<_SelectEditor> {
-  final GlobalKey _anchorKey = GlobalKey();
-
-  @override
-  Widget build(BuildContext context) {
-    final selected =
-        widget.options.where((o) => o.id == widget.value).firstOrNull;
-    return InkWell(
-      key: _anchorKey,
-      onTap: _showOptions,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: selected != null
-            ? Align(
-                alignment: Alignment.centerLeft,
-                child: _OptionChip(option: selected),
-              )
-            : const Text('Empty',
-                style: TextStyle(fontSize: 14, color: Colors.grey)),
-      ),
-    );
-  }
-
-  Future<void> _showOptions() async {
-    final pos = _menuPositionFor(_anchorKey, context);
-    if (pos == null) return;
-    final result = await showMenu<String>(
-      context: context,
-      position: pos,
-      items: [
-        if (widget.value != null)
-          const PopupMenuItem<String>(
-            value: '__clear__',
-            child: Row(children: [
-              Icon(Icons.clear, size: 16, color: Colors.grey),
-              SizedBox(width: 8),
-              Text('Clear'),
-            ]),
-          ),
-        ...widget.options.map((o) => PopupMenuItem<String>(
-              value: o.id,
-              child: _OptionChip(option: o),
-            )),
-      ],
-    );
-    if (result == null) return;
-    widget.onChanged(result == '__clear__' ? null : result);
-  }
-}
-
-class _OptionChip extends StatelessWidget {
-  final SelectOption option;
-  const _OptionChip({required this.option});
-
-  @override
-  Widget build(BuildContext context) {
-    Color? color;
-    try {
-      color = Color(int.parse(option.color.replaceFirst('#', '0xFF')));
-    } catch (_) {}
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: color?.withValues(alpha: 0.15) ?? Colors.grey.shade200,
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(option.name,
-          style: TextStyle(fontSize: 12, color: color ?? Colors.grey.shade800)),
-    );
-  }
-}
-
-String _typeLabel(PropertyType t) => switch (t) {
-      PropertyType.text => 'Text',
-      PropertyType.number => 'Number',
-      PropertyType.date => 'Date',
-      PropertyType.checkbox => 'Checkbox',
-      PropertyType.select => 'Select',
-    };
-
-/// Anchors a [showMenu] popup just to the right of the widget owning [key],
-/// tops aligned, so the menu opens beside the click instead of on top of it.
-RelativeRect? _menuPositionFor(GlobalKey key, BuildContext context) {
-  final box = key.currentContext?.findRenderObject() as RenderBox?;
-  if (box == null) return null;
-  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
-  if (overlay == null) return null;
-  final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
-  final bottomRight =
-      box.localToGlobal(box.size.bottomRight(Offset.zero), ancestor: overlay);
-  return RelativeRect.fromLTRB(
-    bottomRight.dx + 4,
-    topLeft.dy,
-    overlay.size.width - bottomRight.dx + 4,
-    overlay.size.height - topLeft.dy,
-  );
-}
-
-/// Borderless inline editor for a property's name. Looks like plain text;
-/// saves on submit or when focus leaves.
-class _PropertyNameField extends StatefulWidget {
-  final String initial;
-  final void Function(String) onSubmit;
-  const _PropertyNameField({required this.initial, required this.onSubmit});
-
-  @override
-  State<_PropertyNameField> createState() => _PropertyNameFieldState();
-}
-
-class _PropertyNameFieldState extends State<_PropertyNameField> {
-  late final TextEditingController _ctrl;
-  final FocusNode _focus = FocusNode();
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = TextEditingController(text: widget.initial);
-  }
-
-  @override
-  void didUpdateWidget(_PropertyNameField old) {
-    super.didUpdateWidget(old);
-    if (widget.initial != _ctrl.text && !_focus.hasFocus) {
-      _ctrl.text = widget.initial;
-    }
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    _focus.dispose();
-    super.dispose();
-  }
-
-  void _save() {
-    final v = _ctrl.text.trim();
-    if (v.isNotEmpty && v != widget.initial) widget.onSubmit(v);
-  }
-
-  @override
-  Widget build(BuildContext context) => TextField(
-        controller: _ctrl,
-        focusNode: _focus,
-        onSubmitted: (_) => _save(),
-        onTapOutside: (_) {
-          _save();
-          _focus.unfocus();
-        },
-        decoration: const InputDecoration(
-          isDense: true,
-          border: InputBorder.none,
-          contentPadding: EdgeInsets.zero,
-        ),
-        style: const TextStyle(fontSize: 13, color: Colors.grey),
-      );
-}
-
-class _AddPropertyButton extends ConsumerStatefulWidget {
-  final String databaseId;
-  const _AddPropertyButton({required this.databaseId});
-
-  @override
-  ConsumerState<_AddPropertyButton> createState() => _AddPropertyButtonState();
-}
-
-class _AddPropertyButtonState extends ConsumerState<_AddPropertyButton> {
-  final GlobalKey _anchorKey = GlobalKey();
-
-  @override
-  Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: TextButton.icon(
-        key: _anchorKey,
-        onPressed: _showTypeMenu,
-        icon: const Icon(Icons.add, size: 16),
-        label: const Text('Add property'),
-        style: TextButton.styleFrom(
-          foregroundColor: Colors.grey,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          visualDensity: VisualDensity.compact,
-        ),
-      ),
-    );
-  }
-
-  Future<void> _showTypeMenu() async {
-    final pos = _menuPositionFor(_anchorKey, context);
-    if (pos == null) return;
-    final type = await showMenu<PropertyType>(
-      context: context,
-      position: pos,
-      items: PropertyType.values
-          .map((t) => PopupMenuItem<PropertyType>(
-                value: t,
-                child: Row(children: [
-                  Icon(_PropertyRow._typeIcon(t), size: 16, color: Colors.grey),
-                  const SizedBox(width: 10),
-                  Text(_typeLabel(t)),
-                ]),
-              ))
-          .toList(),
-    );
-    if (type == null) return;
-    await ref.read(databaseRepositoryProvider).createProperty(
-          databaseId: widget.databaseId,
-          name: _typeLabel(type),
-          type: type,
-        );
-    ref.read(syncProvider.notifier).triggerDirtySync();
-  }
-}
