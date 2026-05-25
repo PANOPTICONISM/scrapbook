@@ -167,6 +167,19 @@ class BlockRepository {
     );
   }
 
+  /// Reverse a soft delete. Content/type/position are untouched by [deleteBlock],
+  /// so clearing the tombstone restores the block exactly.
+  Future<void> restoreBlock(String id) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await (_db.update(_db.blocksTable)..where((b) => b.id.equals(id))).write(
+      BlocksTableCompanion(
+        deletedAt: const Value(null),
+        updatedAt: Value(now),
+        isDirty: const Value(true),
+      ),
+    );
+  }
+
   /// Ensures the page has at least one block (creates a blank paragraph if none).
   Future<BlockData> ensureFirstBlock(String pageId) async {
     final blocks = await getBlocks(pageId);

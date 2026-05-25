@@ -11,6 +11,7 @@ import 'block_repository.dart';
 import 'block_types.dart';
 import 'block_widget.dart';
 import 'embedded_database.dart';
+import 'markdown_codec.dart';
 import 'slash_menu.dart';
 
 class BlockEditor extends ConsumerStatefulWidget {
@@ -25,6 +26,15 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
   final Map<String, FocusNode> _focusNodes = {};
   final Map<String, Timer> _saveTimers = {};
   final Map<String, GlobalKey<BlockWidgetState>> _blockKeys = {};
+
+  // Single editor-level undo timeline covering text edits (at debounce
+  // granularity), type changes, merges, deletes and inserts. The TextField's
+  // own undo is disabled (Cmd+Z is always consumed by the editor).
+  final List<_UndoAction> _undoStack = [];
+  final List<_UndoAction> _redoStack = [];
+  bool _applyingHistory = false;
+  Timer? _historyResetTimer;
+  final Map<String, void Function()> _pendingSaves = {};
 
   String? _activeSlashBlockId;
   String _slashQuery = '';
@@ -43,6 +53,7 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
 
   @override
   void dispose() {
+    _historyResetTimer?.cancel();
     for (final t in _saveTimers.values) {
       t.cancel();
     }
@@ -69,10 +80,33 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
 
   void _debouncedSave(String blockId, void Function() save) {
     _saveTimers[blockId]?.cancel();
+    _pendingSaves[blockId] = save;
     _saveTimers[blockId] = Timer(const Duration(milliseconds: 400), () {
+      _pendingSaves.remove(blockId);
       save();
       ref.read(syncProvider.notifier).triggerDirtySync();
     });
+  }
+
+  void _cancelPendingSave(String blockId) {
+    _saveTimers.remove(blockId)?.cancel();
+    _pendingSaves.remove(blockId);
+  }
+
+  /// Run any pending debounced saves immediately so the latest typing burst is
+  /// recorded in the undo timeline before a structural op or an undo.
+  void _flushPendingSaves() {
+    if (_pendingSaves.isEmpty) return;
+    final pending = Map.of(_pendingSaves);
+    _pendingSaves.clear();
+    for (final t in _saveTimers.values) {
+      t.cancel();
+    }
+    _saveTimers.clear();
+    for (final save in pending.values) {
+      save();
+    }
+    ref.read(syncProvider.notifier).triggerDirtySync();
   }
 
   /// Drop FocusNodes, pending timers, and block keys for blocks that no longer
@@ -91,6 +125,83 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _focusFor(id).requestFocus();
     });
+  }
+
+  void _record({
+    required Future<void> Function() undo,
+    required Future<void> Function() redo,
+  }) {
+    if (_applyingHistory) return;
+    _undoStack.add(_UndoAction(undo: undo, redo: redo));
+    if (_undoStack.length > 200) _undoStack.removeAt(0);
+    _redoStack.clear();
+  }
+
+  Future<void> _runHistory(Future<void> Function() fn) async {
+    _applyingHistory = true;
+    _historyResetTimer?.cancel();
+    await fn();
+    // Keep the guard up long enough to cover the stream-driven rebuild and the
+    // content-restore postFrames, so none of them record a spurious entry.
+    _historyResetTimer = Timer(const Duration(milliseconds: 150), () {
+      _applyingHistory = false;
+    });
+  }
+
+  void _undo() {
+    _flushPendingSaves();
+    if (_undoStack.isEmpty) return;
+    final action = _undoStack.removeLast();
+    _redoStack.add(action);
+    _runHistory(action.undo);
+  }
+
+  void _redo() {
+    if (_redoStack.isEmpty) return;
+    final action = _redoStack.removeLast();
+    _undoStack.add(action);
+    _runHistory(action.redo);
+  }
+
+  /// Writes [content] to the block and pushes it into the (focused) field,
+  /// used when undo/redo restores a block's text.
+  Future<void> _restoreContent(String id, String content) async {
+    await ref.read(blockRepositoryProvider).updateBlock(id, content: content);
+    ref.read(syncProvider.notifier).triggerDirtySync();
+    _pushContentToField(id, content);
+  }
+
+  Future<void> _restoreTypeAndContent(
+      String id, BlockType type, String content) async {
+    await ref
+        .read(blockRepositoryProvider)
+        .updateBlock(id, type: type, content: content);
+    ref.read(syncProvider.notifier).triggerDirtySync();
+    _pushContentToField(id, content);
+  }
+
+  void _pushContentToField(String id, String content) {
+    final offset = MarkdownCodec.decode(content).text.length;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _blockKeys[id]?.currentState?.setContentAndCaret(content, offset);
+      }
+    });
+  }
+
+  void _recordInsert(String id) {
+    final repo = ref.read(blockRepositoryProvider);
+    _record(
+      undo: () async {
+        await repo.deleteBlock(id);
+        ref.read(syncProvider.notifier).triggerDirtySync();
+      },
+      redo: () async {
+        await repo.restoreBlock(id);
+        ref.read(syncProvider.notifier).triggerDirtySync();
+        _focusBlockAfterLayout(id);
+      },
+    );
   }
 
   @override
@@ -118,7 +229,7 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
           return const SizedBox.shrink();
         }
         return ReorderableListView.builder(
-          padding: const EdgeInsets.only(bottom: 200, top: 8),
+          padding: const EdgeInsets.only(top: 8),
           buildDefaultDragHandles: false,
           itemCount: blocks.length,
           itemBuilder: (context, i) => _buildBlock(blocks, i),
@@ -128,6 +239,18 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
             await repo.moveBlock(movingBlock.id, adjustedIndex, blocks);
             ref.read(syncProvider.notifier).triggerDirtySync();
           },
+          // Clickable empty space below the last block: tapping it appends a
+          // new paragraph, so a trailing database/divider is never a dead end.
+          footer: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () async {
+              final newId = await repo.insertBlock(pageId: widget.pageId);
+              ref.read(syncProvider.notifier).triggerDirtySync();
+              _focusBlockAfterLayout(newId);
+              _recordInsert(newId);
+            },
+            child: const SizedBox(height: 180),
+          ),
         );
       },
     );
@@ -138,8 +261,21 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
     final repo = ref.read(blockRepositoryProvider);
 
     Future<void> deleteBlock() async {
-      await repo.deleteBlock(block.id);
+      final deletedId = block.id;
+      _cancelPendingSave(deletedId);
+      await repo.deleteBlock(deletedId);
       ref.read(syncProvider.notifier).triggerDirtySync();
+      _record(
+        undo: () async {
+          await repo.restoreBlock(deletedId);
+          ref.read(syncProvider.notifier).triggerDirtySync();
+          _focusBlockAfterLayout(deletedId);
+        },
+        redo: () async {
+          await repo.deleteBlock(deletedId);
+          ref.read(syncProvider.notifier).triggerDirtySync();
+        },
+      );
     }
 
     if (block.type == BlockType.database) {
@@ -156,6 +292,14 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
       () => GlobalKey<BlockWidgetState>(),
     );
 
+    // Number within a run of consecutive numbered-list blocks.
+    var listNumber = 1;
+    if (block.type == BlockType.numberedList) {
+      for (var j = i - 1; j >= 0 && blocks[j].type == BlockType.numberedList; j--) {
+        listNumber++;
+      }
+    }
+
     return _DraggableBlock(
       key: ValueKey(block.id),
       index: i,
@@ -165,18 +309,48 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
         type: block.type,
         content: block.content,
         todoChecked: block.todoChecked,
+        listNumber: listNumber,
         focusNode: _focusFor(block.id),
         autofocus: false,
+        onUndo: _undo,
+        onRedo: _redo,
         onContentChanged: (text) {
-          _debouncedSave(block.id, () => repo.updateBlock(block.id, content: text));
+          if (_applyingHistory) return;
+          final id = block.id;
+          final oldContent = block.content;
+          _debouncedSave(id, () {
+            repo.updateBlock(id, content: text);
+            _record(
+              undo: () => _restoreContent(id, oldContent),
+              redo: () => _restoreContent(id, text),
+            );
+          });
         },
         onTypeChanged: (newType) async {
-          await repo.updateBlock(block.id, type: newType, content: '');
+          final id = block.id;
+          final fromType = block.type;
+          final oldContent = block.content;
+          await repo.updateBlock(id, type: newType, content: '');
           ref.read(syncProvider.notifier).triggerDirtySync();
+          _record(
+            undo: () => _restoreTypeAndContent(id, fromType, oldContent),
+            redo: () => _restoreTypeAndContent(id, newType, ''),
+          );
         },
         onTodoCheckedChanged: (checked) async {
-          await repo.updateBlock(block.id, todoChecked: checked);
+          final id = block.id;
+          await repo.updateBlock(id, todoChecked: checked);
           ref.read(syncProvider.notifier).triggerDirtySync();
+          _record(
+            undo: () async {
+              await repo.updateBlock(id, todoChecked: !checked);
+              ref.read(syncProvider.notifier).triggerDirtySync();
+            },
+            redo: () async {
+              await repo.updateBlock(id, todoChecked: checked);
+              ref.read(syncProvider.notifier).triggerDirtySync();
+            },
+          );
         },
         onEnterPressed: () async {
           final next = i + 1 < blocks.length ? blocks[i + 1] : null;
@@ -186,6 +360,7 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
                   block.type == BlockType.todo)
               ? block.type
               : BlockType.paragraph;
+          _flushPendingSaves();
           final newId = await repo.insertBlock(
             pageId: widget.pageId,
             type: newType,
@@ -194,19 +369,76 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
           );
           ref.read(syncProvider.notifier).triggerDirtySync();
           _focusBlockAfterLayout(newId);
+          _recordInsert(newId);
         },
-        onBackspaceEmpty: () async {
-          // Convert non-paragraph blocks back to paragraph before deleting.
+        onBackspaceAtStart: (currentMarkdown) async {
+          // First backspace on a styled/list block just turns it back into text.
           if (block.type != BlockType.paragraph) {
-            await repo.updateBlock(block.id, type: BlockType.paragraph);
+            final id = block.id;
+            final fromType = block.type;
+            await repo.updateBlock(id, type: BlockType.paragraph);
             ref.read(syncProvider.notifier).triggerDirtySync();
+            _record(
+              undo: () async {
+                await repo.updateBlock(id, type: fromType);
+                ref.read(syncProvider.notifier).triggerDirtySync();
+              },
+              redo: () async {
+                await repo.updateBlock(id, type: BlockType.paragraph);
+                ref.read(syncProvider.notifier).triggerDirtySync();
+              },
+            );
             return;
           }
-          if (blocks.length <= 1) return;
-          final prev = i > 0 ? blocks[i - 1] : null;
-          await repo.deleteBlock(block.id);
+          // Merge into the previous block when it's text; don't reach across a
+          // database/divider.
+          if (i == 0) return;
+          final prev = blocks[i - 1];
+          if (prev.type == BlockType.database ||
+              prev.type == BlockType.divider) {
+            return;
+          }
+          // Commit any in-flight typing in either block first so the merge and
+          // its undo capture the real content.
+          _flushPendingSaves();
+          _cancelPendingSave(block.id);
+          final prevId = prev.id;
+          final prevOldContent = prev.content;
+          final deletedId = block.id;
+          final caretOffset = MarkdownCodec.decode(prevOldContent).text.length;
+          final merged = prevOldContent + currentMarkdown;
+          await repo.updateBlock(prevId, content: merged);
+          await repo.deleteBlock(deletedId);
           ref.read(syncProvider.notifier).triggerDirtySync();
-          if (prev != null) _focusBlockAfterLayout(prev.id);
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _blockKeys[prevId]?.currentState?.setContentAndCaret(merged, caretOffset);
+          });
+          _record(
+            undo: () async {
+              await repo.updateBlock(prevId, content: prevOldContent);
+              await repo.restoreBlock(deletedId);
+              ref.read(syncProvider.notifier).triggerDirtySync();
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                _blockKeys[prevId]
+                    ?.currentState
+                    ?.setContentAndCaret(prevOldContent, caretOffset);
+                _focusBlockAfterLayout(deletedId);
+              });
+            },
+            redo: () async {
+              await repo.updateBlock(prevId, content: merged);
+              await repo.deleteBlock(deletedId);
+              ref.read(syncProvider.notifier).triggerDirtySync();
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                _blockKeys[prevId]
+                    ?.currentState
+                    ?.setContentAndCaret(merged, caretOffset);
+              });
+            },
+          );
         },
         onArrowUpAtStart: (caretX) {
           final prev = _findTextBlockAt(blocks, i - 1, step: -1);
@@ -350,7 +582,7 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
     // and schedules a debounced save with content=''. We're about to set the
     // block's content directly, so cancel that pending save or it would race
     // and overwrite us 400 ms later.
-    _saveTimers.remove(blockId)?.cancel();
+    _cancelPendingSave(blockId);
 
     final repo = ref.read(blockRepositoryProvider);
 
@@ -371,6 +603,17 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
         type: BlockType.database,
         content: encodeDatabaseBlock(dbPage.id, view),
       );
+      // A database block has no text field, so append an empty paragraph after
+      // it and focus there — otherwise it's a dead end at the end of the page.
+      final blocks = await repo.getBlocks(widget.pageId);
+      final idx = blocks.indexWhere((b) => b.id == blockId);
+      final next = idx != -1 && idx + 1 < blocks.length ? blocks[idx + 1] : null;
+      final newId = await repo.insertBlock(
+        pageId: widget.pageId,
+        afterPosition: idx != -1 ? blocks[idx].position : null,
+        beforePosition: next?.position,
+      );
+      _focusBlockAfterLayout(newId);
     } else {
       await repo.updateBlock(blockId, type: type, content: '');
     }
@@ -378,6 +621,12 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
     ref.read(syncProvider.notifier).triggerDirtySync();
     if (!isDatabase) _focusFor(blockId).requestFocus();
   }
+}
+
+class _UndoAction {
+  final Future<void> Function() undo;
+  final Future<void> Function() redo;
+  _UndoAction({required this.undo, required this.redo});
 }
 
 class _DraggableBlock extends StatefulWidget {

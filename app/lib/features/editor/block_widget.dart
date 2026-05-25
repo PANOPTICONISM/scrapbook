@@ -15,13 +15,21 @@ class BlockWidget extends StatefulWidget {
   final BlockType type;
   final String content;
   final bool todoChecked;
+  /// 1-based position within a run of consecutive numbered-list blocks.
+  final int listNumber;
   final bool autofocus;
   final FocusNode? focusNode;
   final void Function(String) onContentChanged;
   final void Function(BlockType) onTypeChanged;
   final void Function(bool) onTodoCheckedChanged;
   final VoidCallback onEnterPressed;
-  final VoidCallback onBackspaceEmpty;
+  /// Fires when backspace is pressed with the caret collapsed at offset 0,
+  /// carrying this block's current markdown so the parent can merge it into the
+  /// previous block (or strip the block style).
+  final void Function(String currentMarkdown) onBackspaceAtStart;
+  /// Editor-level undo/redo (Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z).
+  final VoidCallback onUndo;
+  final VoidCallback onRedo;
   /// Fires when ↑ is pressed and there's no line above inside this block.
   /// The [caretX] is the caret's x position in the field's local coords so
   /// the receiving block can land the cursor under the same column.
@@ -43,13 +51,16 @@ class BlockWidget extends StatefulWidget {
     required this.type,
     required this.content,
     required this.todoChecked,
+    this.listNumber = 1,
     required this.autofocus,
     required this.focusNode,
     required this.onContentChanged,
     required this.onTypeChanged,
     required this.onTodoCheckedChanged,
     required this.onEnterPressed,
-    required this.onBackspaceEmpty,
+    required this.onBackspaceAtStart,
+    required this.onUndo,
+    required this.onRedo,
     required this.onArrowUpAtStart,
     required this.onArrowDownAtEnd,
     required this.onSlashTyped,
@@ -71,6 +82,9 @@ class BlockWidgetState extends State<BlockWidget> {
 
   late RichTextController _controller;
   final GlobalKey _fieldKey = GlobalKey();
+  // Guards the backspace-at-start merge so rapid key repeats don't fire it more
+  // than once before the block is removed. Reset on key-up.
+  bool _backspaceLatched = false;
   final LayerLink _fieldLink = LayerLink();
   bool _slashActive = false;
   int _slashStart = -1;
@@ -465,10 +479,39 @@ class BlockWidgetState extends State<BlockWidget> {
   }
 
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
+    // Backspace at the start of a block merges it into the previous one. This
+    // must run on key *repeat* too, so holding backspace deletes across blocks.
+    if (event.logicalKey == LogicalKeyboardKey.backspace) {
+      if (event is KeyUpEvent) {
+        _backspaceLatched = false;
+        return KeyEventResult.ignored;
+      }
+      final sel = _controller.selection;
+      if (sel.isCollapsed && sel.baseOffset == 0) {
+        if (!_backspaceLatched) {
+          _backspaceLatched = true;
+          widget.onBackspaceAtStart(_controller.toMarkdown());
+        }
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    }
+
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
 
     final hk = HardwareKeyboard.instance;
     final isMod = hk.isMetaPressed || hk.isControlPressed;
+    // Undo/redo are owned by the editor (single timeline), so always consume
+    // them here — otherwise the TextField's own undo competes and the order
+    // becomes unpredictable.
+    if (isMod && !hk.isAltPressed && event.logicalKey == LogicalKeyboardKey.keyZ) {
+      if (hk.isShiftPressed) {
+        widget.onRedo();
+      } else {
+        widget.onUndo();
+      }
+      return KeyEventResult.handled;
+    }
     if (isMod && !hk.isShiftPressed && !hk.isAltPressed) {
       if (event.logicalKey == LogicalKeyboardKey.keyB) {
         _applyFormatToCurrent(FormatAction.bold);
@@ -517,12 +560,6 @@ class BlockWidgetState extends State<BlockWidget> {
         widget.onEnterPressed();
         return KeyEventResult.handled;
       }
-    }
-
-    if (event.logicalKey == LogicalKeyboardKey.backspace &&
-        _controller.text.isEmpty) {
-      widget.onBackspaceEmpty();
-      return KeyEventResult.handled;
     }
 
     // Arrow keys hop to the prev/next block only when the caret has nowhere
@@ -574,6 +611,22 @@ class BlockWidgetState extends State<BlockWidget> {
     final canGoDown = below.dy > caretOffset.dy + 0.5;
 
     return (canGoUp: canGoUp, canGoDown: canGoDown, caretX: caretOffset.dx);
+  }
+
+  /// Replace this block's content (markdown) and drop the caret at [offset]
+  /// in the plain text, then focus. Used when a following block merges into
+  /// this one on backspace.
+  void setContentAndCaret(String markdown, int offset) {
+    // Don't let this programmatic change fire onContentChanged (it would
+    // schedule a save and pollute the undo history).
+    _controller.removeListener(_onTextChanged);
+    final styled = MarkdownCodec.decode(markdown);
+    _controller.setStyledText(styled.text, styled.styles);
+    final len = _controller.text.length;
+    _controller.selection =
+        TextSelection.collapsed(offset: offset.clamp(0, len));
+    _controller.addListener(_onTextChanged);
+    widget.focusNode?.requestFocus();
   }
 
   /// Place the caret near the given x on this block's last visual line.
@@ -687,7 +740,7 @@ class BlockWidgetState extends State<BlockWidget> {
             children: [
               Padding(
                 padding: const EdgeInsets.only(top: 0, right: 8, left: 0),
-                child: Text('1.', style: TextStyle(fontSize: 16, height: 1.6, color: markerColor)),
+                child: Text('${widget.listNumber}.', style: TextStyle(fontSize: 16, height: 1.6, color: markerColor)),
               ),
               Expanded(child: child),
             ],
