@@ -10,9 +10,13 @@ use axum::{
     Router,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use std::{net::SocketAddr, str::FromStr, sync::Arc};
+use std::{net::SocketAddr, path::Path, str::FromStr, sync::Arc};
 use tokio::sync::broadcast;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{
+    cors::CorsLayer,
+    services::{ServeDir, ServeFile},
+    trace::TraceLayer,
+};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use config::Config;
@@ -73,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
 
     cleanup::spawn(state.clone());
 
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/api/health", get(|| async { "ok" }))
         .route("/api/pages", get(pages::list_pages).post(pages::create_page))
         .route("/api/pages/{id}", get(pages::get_page).patch(pages::update_page).delete(pages::delete_page))
@@ -86,7 +90,21 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/databases/{id}/rows/{row_id}", delete(databases::delete_row))
         .route("/api/rows/{row_id}/values", get(databases::list_values).post(databases::upsert_value))
         .route("/api/sync", get(sync::pull).post(sync::push))
-        .route("/api/ws", get(ws::ws_handler))
+        .route("/api/ws", get(ws::ws_handler));
+
+    // Serve the Flutter web build (the PWA) when present, so the same server
+    // hosts both the API and the web app on one port. Unknown paths fall back
+    // to index.html for client-side routing.
+    let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "/srv/web".to_string());
+    if Path::new(&static_dir).is_dir() {
+        tracing::info!("Serving web app from {static_dir}");
+        let index = format!("{static_dir}/index.html");
+        app = app.fallback_service(
+            ServeDir::new(&static_dir).fallback(ServeFile::new(index)),
+        );
+    }
+
+    let app = app
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

@@ -43,3 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Byproducts of `dart compile js` for the drift web worker (keep only the .js)
+web/*.js.deps
+web/*.js.map

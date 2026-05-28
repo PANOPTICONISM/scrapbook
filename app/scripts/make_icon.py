@@ -27,6 +27,8 @@ APP = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 ASSETS = os.path.join(APP, "assets", "icon")
 MACOS_SET = os.path.join(APP, "macos/Runner/Assets.xcassets/AppIcon.appiconset")
 IOS_SET = os.path.join(APP, "ios/Runner/Assets.xcassets/AppIcon.appiconset")
+WEB = os.path.join(APP, "web")
+WEB_ICONS = os.path.join(WEB, "icons")
 
 # Shark outline in a 1024 design space (facing right), centered ~(498, 507).
 SHARK = [
@@ -133,6 +135,24 @@ def write_ios(full_1024_rgb):
     })
 
 
+def write_web():
+    if not os.path.isdir(WEB):
+        return
+    os.makedirs(WEB_ICONS, exist_ok=True)
+    reg = render(1024, rounded=False, shark_scale=0.82, with_shark=True,
+                 with_bg=True, shadow=False).convert("RGB")
+    # maskable: keep the shark in the center safe zone so launchers can crop.
+    msk = render(1024, rounded=False, shark_scale=0.60, with_shark=True,
+                 with_bg=True, shadow=False).convert("RGB")
+    reg.resize((192, 192), Image.LANCZOS).save(os.path.join(WEB_ICONS, "Icon-192.png"))
+    reg.resize((512, 512), Image.LANCZOS).save(os.path.join(WEB_ICONS, "Icon-512.png"))
+    msk.resize((192, 192), Image.LANCZOS).save(os.path.join(WEB_ICONS, "Icon-maskable-192.png"))
+    msk.resize((512, 512), Image.LANCZOS).save(os.path.join(WEB_ICONS, "Icon-maskable-512.png"))
+    # iOS home-screen icon (Safari rounds it) + favicon.
+    reg.resize((180, 180), Image.LANCZOS).save(os.path.join(WEB, "apple-touch-icon.png"))
+    reg.resize((32, 32), Image.LANCZOS).save(os.path.join(WEB, "favicon.png"))
+
+
 def write_android():
     dart = shutil.which("dart") or shutil.which("flutter")
     if not dart:
@@ -160,8 +180,9 @@ def main():
 
     write_macos(macos)
     write_ios(full)
+    write_web()
     write_android()
-    print("✓ icons regenerated for macOS, iOS and Android")
+    print("✓ icons regenerated for macOS, iOS, web and Android")
 
 
 if __name__ == "__main__":
