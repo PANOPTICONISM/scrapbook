@@ -99,13 +99,14 @@ pub async fn push(
         match existing {
             None => {
                 sqlx::query(
-                    "INSERT INTO pages (id, parent_id, title, icon, is_database, position, created_at, updated_at, deleted_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO pages (id, parent_id, title, icon, cover, is_database, position, created_at, updated_at, deleted_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 )
                 .bind(&page.id)
                 .bind(&page.parent_id)
                 .bind(&page.title)
                 .bind(&page.icon)
+                .bind(&page.cover)
                 .bind(page.is_database)
                 .bind(page.position)
                 .bind(page.created_at)
@@ -117,12 +118,13 @@ pub async fn push(
             }
             Some(existing) if page.updated_at >= existing.updated_at => {
                 sqlx::query(
-                    "UPDATE pages SET parent_id=?, title=?, icon=?, is_database=?, position=?, updated_at=?, deleted_at=?
+                    "UPDATE pages SET parent_id=?, title=?, icon=?, cover=?, is_database=?, position=?, updated_at=?, deleted_at=?
                      WHERE id=?",
                 )
                 .bind(&page.parent_id)
                 .bind(&page.title)
                 .bind(&page.icon)
+                .bind(&page.cover)
                 .bind(page.is_database)
                 .bind(page.position)
                 .bind(page.updated_at)

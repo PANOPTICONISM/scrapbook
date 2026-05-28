@@ -6,6 +6,7 @@ pub struct Config {
     pub api_token: String,
     pub host: String,
     pub port: u16,
+    pub files_dir: String,
 }
 
 impl Config {
@@ -26,6 +27,7 @@ impl Config {
                 .unwrap_or_else(|_| "8080".to_string())
                 .parse()
                 .unwrap_or(8080),
+            files_dir: env::var("FILES_DIR").unwrap_or_else(|_| "/data/files".to_string()),
         })
     }
 }

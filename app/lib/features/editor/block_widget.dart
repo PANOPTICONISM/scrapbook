@@ -784,9 +784,10 @@ class BlockWidgetState extends State<BlockWidget> {
           child: child,
         ),
       BlockType.divider => const SizedBox.shrink(),
-      // Database blocks are rendered by the BlockEditor directly, never by
-      // BlockWidget; databaseTable/databaseGallery are slash-menu-only and are
-      // never stored. These arms only keep the switch exhaustive.
+      // Database and image blocks are rendered by the BlockEditor directly,
+      // never by BlockWidget; databaseTable/databaseGallery are slash-menu-only
+      // and are never stored. These arms only keep the switch exhaustive.
+      BlockType.image ||
       BlockType.database ||
       BlockType.databaseTable ||
       BlockType.databaseGallery =>

@@ -3,6 +3,7 @@ class PageModel {
   final String? parentId;
   final String title;
   final String? icon;
+  final String? cover;
   final bool isDatabase;
   final double position;
   final int createdAt;
@@ -14,6 +15,7 @@ class PageModel {
     this.parentId,
     required this.title,
     this.icon,
+    this.cover,
     required this.isDatabase,
     required this.position,
     required this.createdAt,
@@ -24,6 +26,7 @@ class PageModel {
   PageModel copyWith({
     String? title,
     String? icon,
+    String? cover,
     String? parentId,
     double? position,
     int? updatedAt,
@@ -34,6 +37,7 @@ class PageModel {
         parentId: parentId ?? this.parentId,
         title: title ?? this.title,
         icon: icon ?? this.icon,
+        cover: cover ?? this.cover,
         isDatabase: isDatabase,
         position: position ?? this.position,
         createdAt: createdAt,

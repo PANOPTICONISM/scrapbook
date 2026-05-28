@@ -6,6 +6,8 @@ pub struct Page {
     pub parent_id: Option<String>,
     pub title: String,
     pub icon: Option<String>,
+    #[serde(default)]
+    pub cover: Option<String>,
     pub is_database: bool,
     pub position: f64,
     pub created_at: i64,

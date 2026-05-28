@@ -11,6 +11,7 @@ enum BlockType {
   quote,
   code,
   divider,
+  image,
   database,
   // Slash-menu-only entries: both create a `database` block, differing only in
   // the initial view. They are never stored as a block type.
@@ -28,6 +29,7 @@ enum BlockType {
         BlockType.quote => 'quote',
         BlockType.code => 'code',
         BlockType.divider => 'divider',
+        BlockType.image => 'image',
         BlockType.database => 'database',
         BlockType.databaseTable => 'database_table',
         BlockType.databaseGallery => 'database_gallery',
@@ -43,6 +45,7 @@ enum BlockType {
         'quote' => BlockType.quote,
         'code' => BlockType.code,
         'divider' => BlockType.divider,
+        'image' => BlockType.image,
         'database' => BlockType.database,
         _ => BlockType.paragraph,
       };
@@ -58,6 +61,7 @@ enum BlockType {
         BlockType.quote => 'Quote',
         BlockType.code => 'Code',
         BlockType.divider => 'Divider',
+        BlockType.image => 'Image',
         BlockType.database => 'Database',
         BlockType.databaseTable => 'Table',
         BlockType.databaseGallery => 'Gallery',
@@ -74,6 +78,7 @@ enum BlockType {
         BlockType.quote => Icons.format_quote,
         BlockType.code => Icons.code,
         BlockType.divider => Icons.horizontal_rule,
+        BlockType.image => Icons.image_outlined,
         BlockType.database => Icons.grid_view,
         BlockType.databaseTable => Icons.table_chart,
         BlockType.databaseGallery => Icons.grid_view,

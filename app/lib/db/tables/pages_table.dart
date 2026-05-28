@@ -5,6 +5,7 @@ class PagesTable extends Table {
   TextColumn get parentId => text().nullable()();
   TextColumn get title => text().withDefault(const Constant(''))();
   TextColumn get icon => text().nullable()();
+  TextColumn get cover => text().nullable()();
   BoolColumn get isDatabase => boolean().withDefault(const Constant(false))();
   RealColumn get position => real().withDefault(const Constant(0.0))();
   IntColumn get createdAt => integer()();

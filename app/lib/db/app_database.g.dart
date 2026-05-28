@@ -48,6 +48,15 @@ class $PagesTableTable extends PagesTable
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _coverMeta = const VerificationMeta('cover');
+  @override
+  late final GeneratedColumn<String> cover = GeneratedColumn<String>(
+    'cover',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _isDatabaseMeta = const VerificationMeta(
     'isDatabase',
   );
@@ -142,6 +151,7 @@ class $PagesTableTable extends PagesTable
     parentId,
     title,
     icon,
+    cover,
     isDatabase,
     position,
     createdAt,
@@ -183,6 +193,12 @@ class $PagesTableTable extends PagesTable
       context.handle(
         _iconMeta,
         icon.isAcceptableOrUnknown(data['icon']!, _iconMeta),
+      );
+    }
+    if (data.containsKey('cover')) {
+      context.handle(
+        _coverMeta,
+        cover.isAcceptableOrUnknown(data['cover']!, _coverMeta),
       );
     }
     if (data.containsKey('is_database')) {
@@ -256,6 +272,10 @@ class $PagesTableTable extends PagesTable
         DriftSqlType.string,
         data['${effectivePrefix}icon'],
       ),
+      cover: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}cover'],
+      ),
       isDatabase: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}is_database'],
@@ -298,6 +318,7 @@ class PagesTableData extends DataClass implements Insertable<PagesTableData> {
   final String? parentId;
   final String title;
   final String? icon;
+  final String? cover;
   final bool isDatabase;
   final double position;
   final int createdAt;
@@ -310,6 +331,7 @@ class PagesTableData extends DataClass implements Insertable<PagesTableData> {
     this.parentId,
     required this.title,
     this.icon,
+    this.cover,
     required this.isDatabase,
     required this.position,
     required this.createdAt,
@@ -328,6 +350,9 @@ class PagesTableData extends DataClass implements Insertable<PagesTableData> {
     map['title'] = Variable<String>(title);
     if (!nullToAbsent || icon != null) {
       map['icon'] = Variable<String>(icon);
+    }
+    if (!nullToAbsent || cover != null) {
+      map['cover'] = Variable<String>(cover);
     }
     map['is_database'] = Variable<bool>(isDatabase);
     map['position'] = Variable<double>(position);
@@ -349,6 +374,9 @@ class PagesTableData extends DataClass implements Insertable<PagesTableData> {
           : Value(parentId),
       title: Value(title),
       icon: icon == null && nullToAbsent ? const Value.absent() : Value(icon),
+      cover: cover == null && nullToAbsent
+          ? const Value.absent()
+          : Value(cover),
       isDatabase: Value(isDatabase),
       position: Value(position),
       createdAt: Value(createdAt),
@@ -371,6 +399,7 @@ class PagesTableData extends DataClass implements Insertable<PagesTableData> {
       parentId: serializer.fromJson<String?>(json['parentId']),
       title: serializer.fromJson<String>(json['title']),
       icon: serializer.fromJson<String?>(json['icon']),
+      cover: serializer.fromJson<String?>(json['cover']),
       isDatabase: serializer.fromJson<bool>(json['isDatabase']),
       position: serializer.fromJson<double>(json['position']),
       createdAt: serializer.fromJson<int>(json['createdAt']),
@@ -388,6 +417,7 @@ class PagesTableData extends DataClass implements Insertable<PagesTableData> {
       'parentId': serializer.toJson<String?>(parentId),
       'title': serializer.toJson<String>(title),
       'icon': serializer.toJson<String?>(icon),
+      'cover': serializer.toJson<String?>(cover),
       'isDatabase': serializer.toJson<bool>(isDatabase),
       'position': serializer.toJson<double>(position),
       'createdAt': serializer.toJson<int>(createdAt),
@@ -403,6 +433,7 @@ class PagesTableData extends DataClass implements Insertable<PagesTableData> {
     Value<String?> parentId = const Value.absent(),
     String? title,
     Value<String?> icon = const Value.absent(),
+    Value<String?> cover = const Value.absent(),
     bool? isDatabase,
     double? position,
     int? createdAt,
@@ -415,6 +446,7 @@ class PagesTableData extends DataClass implements Insertable<PagesTableData> {
     parentId: parentId.present ? parentId.value : this.parentId,
     title: title ?? this.title,
     icon: icon.present ? icon.value : this.icon,
+    cover: cover.present ? cover.value : this.cover,
     isDatabase: isDatabase ?? this.isDatabase,
     position: position ?? this.position,
     createdAt: createdAt ?? this.createdAt,
@@ -429,6 +461,7 @@ class PagesTableData extends DataClass implements Insertable<PagesTableData> {
       parentId: data.parentId.present ? data.parentId.value : this.parentId,
       title: data.title.present ? data.title.value : this.title,
       icon: data.icon.present ? data.icon.value : this.icon,
+      cover: data.cover.present ? data.cover.value : this.cover,
       isDatabase: data.isDatabase.present
           ? data.isDatabase.value
           : this.isDatabase,
@@ -448,6 +481,7 @@ class PagesTableData extends DataClass implements Insertable<PagesTableData> {
           ..write('parentId: $parentId, ')
           ..write('title: $title, ')
           ..write('icon: $icon, ')
+          ..write('cover: $cover, ')
           ..write('isDatabase: $isDatabase, ')
           ..write('position: $position, ')
           ..write('createdAt: $createdAt, ')
@@ -465,6 +499,7 @@ class PagesTableData extends DataClass implements Insertable<PagesTableData> {
     parentId,
     title,
     icon,
+    cover,
     isDatabase,
     position,
     createdAt,
@@ -481,6 +516,7 @@ class PagesTableData extends DataClass implements Insertable<PagesTableData> {
           other.parentId == this.parentId &&
           other.title == this.title &&
           other.icon == this.icon &&
+          other.cover == this.cover &&
           other.isDatabase == this.isDatabase &&
           other.position == this.position &&
           other.createdAt == this.createdAt &&
@@ -495,6 +531,7 @@ class PagesTableCompanion extends UpdateCompanion<PagesTableData> {
   final Value<String?> parentId;
   final Value<String> title;
   final Value<String?> icon;
+  final Value<String?> cover;
   final Value<bool> isDatabase;
   final Value<double> position;
   final Value<int> createdAt;
@@ -508,6 +545,7 @@ class PagesTableCompanion extends UpdateCompanion<PagesTableData> {
     this.parentId = const Value.absent(),
     this.title = const Value.absent(),
     this.icon = const Value.absent(),
+    this.cover = const Value.absent(),
     this.isDatabase = const Value.absent(),
     this.position = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -522,6 +560,7 @@ class PagesTableCompanion extends UpdateCompanion<PagesTableData> {
     this.parentId = const Value.absent(),
     this.title = const Value.absent(),
     this.icon = const Value.absent(),
+    this.cover = const Value.absent(),
     this.isDatabase = const Value.absent(),
     this.position = const Value.absent(),
     required int createdAt,
@@ -538,6 +577,7 @@ class PagesTableCompanion extends UpdateCompanion<PagesTableData> {
     Expression<String>? parentId,
     Expression<String>? title,
     Expression<String>? icon,
+    Expression<String>? cover,
     Expression<bool>? isDatabase,
     Expression<double>? position,
     Expression<int>? createdAt,
@@ -552,6 +592,7 @@ class PagesTableCompanion extends UpdateCompanion<PagesTableData> {
       if (parentId != null) 'parent_id': parentId,
       if (title != null) 'title': title,
       if (icon != null) 'icon': icon,
+      if (cover != null) 'cover': cover,
       if (isDatabase != null) 'is_database': isDatabase,
       if (position != null) 'position': position,
       if (createdAt != null) 'created_at': createdAt,
@@ -568,6 +609,7 @@ class PagesTableCompanion extends UpdateCompanion<PagesTableData> {
     Value<String?>? parentId,
     Value<String>? title,
     Value<String?>? icon,
+    Value<String?>? cover,
     Value<bool>? isDatabase,
     Value<double>? position,
     Value<int>? createdAt,
@@ -582,6 +624,7 @@ class PagesTableCompanion extends UpdateCompanion<PagesTableData> {
       parentId: parentId ?? this.parentId,
       title: title ?? this.title,
       icon: icon ?? this.icon,
+      cover: cover ?? this.cover,
       isDatabase: isDatabase ?? this.isDatabase,
       position: position ?? this.position,
       createdAt: createdAt ?? this.createdAt,
@@ -607,6 +650,9 @@ class PagesTableCompanion extends UpdateCompanion<PagesTableData> {
     }
     if (icon.present) {
       map['icon'] = Variable<String>(icon.value);
+    }
+    if (cover.present) {
+      map['cover'] = Variable<String>(cover.value);
     }
     if (isDatabase.present) {
       map['is_database'] = Variable<bool>(isDatabase.value);
@@ -642,6 +688,7 @@ class PagesTableCompanion extends UpdateCompanion<PagesTableData> {
           ..write('parentId: $parentId, ')
           ..write('title: $title, ')
           ..write('icon: $icon, ')
+          ..write('cover: $cover, ')
           ..write('isDatabase: $isDatabase, ')
           ..write('position: $position, ')
           ..write('createdAt: $createdAt, ')
@@ -3126,6 +3173,7 @@ typedef $$PagesTableTableCreateCompanionBuilder =
       Value<String?> parentId,
       Value<String> title,
       Value<String?> icon,
+      Value<String?> cover,
       Value<bool> isDatabase,
       Value<double> position,
       required int createdAt,
@@ -3141,6 +3189,7 @@ typedef $$PagesTableTableUpdateCompanionBuilder =
       Value<String?> parentId,
       Value<String> title,
       Value<String?> icon,
+      Value<String?> cover,
       Value<bool> isDatabase,
       Value<double> position,
       Value<int> createdAt,
@@ -3279,6 +3328,11 @@ class $$PagesTableTableFilterComposer
 
   ColumnFilters<String> get icon => $composableBuilder(
     column: $table.icon,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get cover => $composableBuilder(
+    column: $table.cover,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3448,6 +3502,11 @@ class $$PagesTableTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get cover => $composableBuilder(
+    column: $table.cover,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get isDatabase => $composableBuilder(
     column: $table.isDatabase,
     builder: (column) => ColumnOrderings(column),
@@ -3504,6 +3563,9 @@ class $$PagesTableTableAnnotationComposer
 
   GeneratedColumn<String> get icon =>
       $composableBuilder(column: $table.icon, builder: (column) => column);
+
+  GeneratedColumn<String> get cover =>
+      $composableBuilder(column: $table.cover, builder: (column) => column);
 
   GeneratedColumn<bool> get isDatabase => $composableBuilder(
     column: $table.isDatabase,
@@ -3670,6 +3732,7 @@ class $$PagesTableTableTableManager
                 Value<String?> parentId = const Value.absent(),
                 Value<String> title = const Value.absent(),
                 Value<String?> icon = const Value.absent(),
+                Value<String?> cover = const Value.absent(),
                 Value<bool> isDatabase = const Value.absent(),
                 Value<double> position = const Value.absent(),
                 Value<int> createdAt = const Value.absent(),
@@ -3683,6 +3746,7 @@ class $$PagesTableTableTableManager
                 parentId: parentId,
                 title: title,
                 icon: icon,
+                cover: cover,
                 isDatabase: isDatabase,
                 position: position,
                 createdAt: createdAt,
@@ -3698,6 +3762,7 @@ class $$PagesTableTableTableManager
                 Value<String?> parentId = const Value.absent(),
                 Value<String> title = const Value.absent(),
                 Value<String?> icon = const Value.absent(),
+                Value<String?> cover = const Value.absent(),
                 Value<bool> isDatabase = const Value.absent(),
                 Value<double> position = const Value.absent(),
                 required int createdAt,
@@ -3711,6 +3776,7 @@ class $$PagesTableTableTableManager
                 parentId: parentId,
                 title: title,
                 icon: icon,
+                cover: cover,
                 isDatabase: isDatabase,
                 position: position,
                 createdAt: createdAt,

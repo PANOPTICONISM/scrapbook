@@ -19,8 +19,9 @@ use tower_http::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use axum::extract::DefaultBodyLimit;
 use config::Config;
-use routes::{blocks, databases, pages, sync, ws};
+use routes::{blocks, databases, files, pages, sync, ws};
 
 pub struct AppState {
     pub db: sqlx::SqlitePool,
@@ -53,6 +54,7 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::from_env()?;
     tracing::info!("Starting scrapbook server on {}:{}", config.host, config.port);
+    tokio::fs::create_dir_all(&config.files_dir).await.ok();
 
     let opts = SqliteConnectOptions::from_str(&config.database_url)?
         .create_if_missing(true)
@@ -89,6 +91,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/databases/{id}/rows", get(databases::list_rows).post(databases::create_row))
         .route("/api/databases/{id}/rows/{row_id}", delete(databases::delete_row))
         .route("/api/rows/{row_id}/values", get(databases::list_values).post(databases::upsert_value))
+        .route(
+            "/api/files",
+            post(files::upload_file).layer(DefaultBodyLimit::max(25 * 1024 * 1024)),
+        )
+        .route("/api/files/{id}", get(files::get_file))
         .route("/api/sync", get(sync::pull).post(sync::push))
         .route("/api/ws", get(ws::ws_handler));
 

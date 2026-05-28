@@ -83,6 +83,18 @@ class PageRepository {
     );
   }
 
+  /// Set or clear a page's cover image (a file id, or null to remove).
+  Future<void> updateCover(String id, String? cover) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await (_db.update(_db.pagesTable)..where((p) => p.id.equals(id))).write(
+      PagesTableCompanion(
+        cover: Value(cover),
+        updatedAt: Value(now),
+        isDirty: const Value(true),
+      ),
+    );
+  }
+
   /// Move a page to a new position among siblings under [newParentId] (null = root).
   /// [siblings] is the ordered list of pages that will share the same parent
   /// AFTER the move, excluding the moving page itself.
@@ -184,6 +196,7 @@ class PageRepository {
         parentId: row.parentId,
         title: row.title,
         icon: row.icon,
+        cover: row.cover,
         isDatabase: row.isDatabase,
         position: row.position,
         createdAt: row.createdAt,

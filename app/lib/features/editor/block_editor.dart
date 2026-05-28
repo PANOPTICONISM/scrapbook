@@ -5,12 +5,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../shared/widgets/drag_handle.dart';
 import '../databases/presentation/database_view.dart';
+import '../files/file_repository.dart';
 import '../pages/data/page_repository.dart';
 import '../sync/sync_provider.dart';
 import 'block_repository.dart';
 import 'block_types.dart';
 import 'block_widget.dart';
 import 'embedded_database.dart';
+import 'image_block.dart';
 import 'markdown_codec.dart';
 import 'slash_menu.dart';
 
@@ -70,7 +72,8 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
     int i = start;
     while (i >= 0 && i < blocks.length) {
       if (blocks[i].type != BlockType.database &&
-          blocks[i].type != BlockType.divider) {
+          blocks[i].type != BlockType.divider &&
+          blocks[i].type != BlockType.image) {
         return blocks[i];
       }
       i += step;
@@ -287,6 +290,15 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
       );
     }
 
+    if (block.type == BlockType.image) {
+      return _DraggableBlock(
+        key: ValueKey(block.id),
+        index: i,
+        onDelete: deleteBlock,
+        child: ImageBlock(blockId: block.id, content: block.content),
+      );
+    }
+
     final blockKey = _blockKeys.putIfAbsent(
       block.id,
       () => GlobalKey<BlockWidgetState>(),
@@ -395,7 +407,8 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
           if (i == 0) return;
           final prev = blocks[i - 1];
           if (prev.type == BlockType.database ||
-              prev.type == BlockType.divider) {
+              prev.type == BlockType.divider ||
+              prev.type == BlockType.image) {
             return;
           }
           // Commit any in-flight typing in either block first so the merge and
@@ -588,6 +601,7 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
 
     final isDatabase = type == BlockType.databaseTable ||
         type == BlockType.databaseGallery;
+    final isImage = type == BlockType.image;
 
     if (isDatabase) {
       final pageRepo = ref.read(pageRepositoryProvider);
@@ -603,8 +617,15 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
         type: BlockType.database,
         content: encodeDatabaseBlock(dbPage.id, view),
       );
-      // A database block has no text field, so append an empty paragraph after
-      // it and focus there — otherwise it's a dead end at the end of the page.
+    } else if (isImage) {
+      await repo.updateBlock(blockId, type: BlockType.image, content: '');
+    } else {
+      await repo.updateBlock(blockId, type: type, content: '');
+    }
+
+    // Non-text blocks (database/image) have no text field, so append an empty
+    // paragraph after them and focus there — otherwise they're a dead end.
+    if (isDatabase || isImage) {
       final blocks = await repo.getBlocks(widget.pageId);
       final idx = blocks.indexWhere((b) => b.id == blockId);
       final next = idx != -1 && idx + 1 < blocks.length ? blocks[idx + 1] : null;
@@ -614,12 +635,27 @@ class _BlockEditorState extends ConsumerState<BlockEditor> {
         beforePosition: next?.position,
       );
       _focusBlockAfterLayout(newId);
-    } else {
-      await repo.updateBlock(blockId, type: type, content: '');
     }
 
     ref.read(syncProvider.notifier).triggerDirtySync();
-    if (!isDatabase) _focusFor(blockId).requestFocus();
+    if (!isDatabase && !isImage) _focusFor(blockId).requestFocus();
+
+    // Open the picker right away so the slash flow feels like one action.
+    if (isImage) {
+      try {
+        final id = await ref.read(fileRepositoryProvider).pickAndUploadImage();
+        if (id != null) {
+          await repo.updateBlock(blockId, content: id);
+          ref.read(syncProvider.notifier).triggerDirtySync();
+        }
+      } catch (_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Couldn't upload image")),
+          );
+        }
+      }
+    }
   }
 }
 
