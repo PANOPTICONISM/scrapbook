@@ -95,6 +95,18 @@ class PageRepository {
     );
   }
 
+  /// Set or clear a page's icon (an emoji, or null to remove).
+  Future<void> updateIcon(String id, String? icon) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await (_db.update(_db.pagesTable)..where((p) => p.id.equals(id))).write(
+      PagesTableCompanion(
+        icon: Value(icon),
+        updatedAt: Value(now),
+        isDirty: const Value(true),
+      ),
+    );
+  }
+
   /// Move a page to a new position among siblings under [newParentId] (null = root).
   /// [siblings] is the ordered list of pages that will share the same parent
   /// AFTER the move, excluding the moving page itself.

@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../../features/databases/data/database_repository.dart';
 import '../../../features/databases/domain/database_model.dart';
 import '../../../features/databases/domain/database_row_model.dart';
+import '../../../features/files/file_repository.dart';
 import '../../../features/pages/data/page_repository.dart';
 import '../../../features/pages/domain/page_model.dart';
 import '../../../features/sync/sync_provider.dart';
@@ -64,6 +65,16 @@ class _DatabaseScreenState extends ConsumerState<DatabaseScreen> {
         );
     final page = allPages.where((p) => p.id == widget.pageId).firstOrNull;
     final pageTitles = <String, String>{for (final p in allPages) p.id: p.title};
+    final pageIcons = <String, String>{
+      for (final p in allPages) p.id: p.icon ?? ''
+    };
+    final pageCovers = <String, String>{
+      for (final p in allPages)
+        if (p.cover != null) p.id: p.cover!
+    };
+    final serverConfig = ref
+        .watch(serverConfigProvider)
+        .maybeWhen(data: (c) => c, orElse: () => null);
 
     // Sync the title controller when the page is loaded or changed externally,
     // but only when the user isn't actively editing it.
@@ -138,6 +149,9 @@ class _DatabaseScreenState extends ConsumerState<DatabaseScreen> {
                       rows: rows,
                       properties: properties,
                       pageTitles: pageTitles,
+                      pageIcons: pageIcons,
+                      pageCovers: pageCovers,
+                      serverConfig: serverConfig,
                       onRowTap: (row) => context.go('/pages/${row.pageId}'),
                     )
                   : TableView(

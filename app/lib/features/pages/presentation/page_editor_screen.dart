@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -65,11 +66,12 @@ class _PageEditorScreenState extends ConsumerState<PageEditorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final cover = ref.watch(allPagesProvider).maybeWhen(
-          data: (pages) =>
-              pages.where((p) => p.id == widget.pageId).firstOrNull?.cover,
+    final page = ref.watch(allPagesProvider).maybeWhen(
+          data: (pages) => pages.where((p) => p.id == widget.pageId).firstOrNull,
           orElse: () => null,
         );
+    final cover = page?.cover;
+    final icon = page?.icon;
     return Scaffold(
       appBar: AppBar(
         title: const SizedBox.shrink(),
@@ -98,8 +100,9 @@ class _PageEditorScreenState extends ConsumerState<PageEditorScreen> {
       body: Column(
         children: [
           _CoverArea(pageId: widget.pageId, cover: cover),
+          _IconArea(pageId: widget.pageId, icon: icon),
           Padding(
-            padding: const EdgeInsets.fromLTRB(60, 16, 60, 8),
+            padding: const EdgeInsets.fromLTRB(60, 0, 60, 8),
             child: TextField(
               controller: _titleController,
               onChanged: _onTitleChanged,
@@ -128,6 +131,131 @@ class _PageEditorScreenState extends ConsumerState<PageEditorScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _IconArea extends ConsumerWidget {
+  final String pageId;
+  final String? icon;
+  const _IconArea({required this.pageId, required this.icon});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    Future<void> setIcon(String? value) async {
+      await ref.read(pageRepositoryProvider).updateIcon(pageId, value);
+      ref.read(syncProvider.notifier).triggerDirtySync();
+    }
+
+    void openPicker() {
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => Dialog(
+          clipBehavior: Clip.antiAlias,
+          child: SizedBox(
+            width: 360,
+            height: 420,
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    const SizedBox(width: 16),
+                    const Expanded(
+                      child: Text('Choose an icon',
+                          style: TextStyle(fontWeight: FontWeight.w600)),
+                    ),
+                    if (icon != null)
+                      TextButton(
+                        onPressed: () {
+                          setIcon(null);
+                          Navigator.pop(ctx);
+                        },
+                        child: const Text('Remove'),
+                      ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ],
+                ),
+                Expanded(
+                  child: EmojiPicker(
+                    onEmojiSelected: (category, emoji) {
+                      setIcon(emoji.emoji);
+                      Navigator.pop(ctx);
+                    },
+                    config: Config(
+                      height: null,
+                      viewOrderConfig: const ViewOrderConfig(
+                        top: EmojiPickerItem.searchBar,
+                        middle: EmojiPickerItem.emojiView,
+                        bottom: EmojiPickerItem.categoryBar,
+                      ),
+                      emojiViewConfig: EmojiViewConfig(
+                        backgroundColor: scheme.surface,
+                        columns: 9,
+                        emojiSizeMax: 26,
+                        gridPadding: const EdgeInsets.symmetric(horizontal: 8),
+                        buttonMode: ButtonMode.NONE,
+                      ),
+                      categoryViewConfig: CategoryViewConfig(
+                        backgroundColor: scheme.surface,
+                        indicatorColor: scheme.primary,
+                        iconColorSelected: scheme.primary,
+                        iconColor: Colors.grey,
+                        backspaceColor: scheme.primary,
+                        tabBarHeight: 40,
+                        dividerColor: scheme.outlineVariant,
+                      ),
+                      searchViewConfig: SearchViewConfig(
+                        backgroundColor: scheme.surface,
+                        buttonIconColor: Colors.grey,
+                        hintText: 'Search emoji',
+                      ),
+                      bottomActionBarConfig:
+                          const BottomActionBarConfig(enabled: false),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (icon == null) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: Padding(
+          padding: const EdgeInsets.only(left: 56, top: 8),
+          child: TextButton.icon(
+            onPressed: openPicker,
+            icon: const Icon(Icons.emoji_emotions_outlined, size: 16),
+            label: const Text('Add icon'),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.grey,
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(left: 56, top: 8),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: InkWell(
+          onTap: openPicker,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.all(4),
+            child: Text(icon!, style: const TextStyle(fontSize: 40)),
+          ),
+        ),
       ),
     );
   }

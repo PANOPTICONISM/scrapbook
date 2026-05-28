@@ -192,8 +192,14 @@ class BlockWidgetState extends State<BlockWidget> {
     // text, otherwise visible-text-equals-markdown blocks would silently lose
     // their styles on every rebuild.
     if (widget.content != _controller.toMarkdown() && !_isFocused()) {
+      // Detach the listener: this runs during build, and setStyledText notifies
+      // synchronously. Letting _onTextChanged fire here would re-trigger slash
+      // detection / overlay insertion (setState during build) and schedule a
+      // spurious save.
+      _controller.removeListener(_onTextChanged);
       final styled = MarkdownCodec.decode(widget.content);
       _controller.setStyledText(styled.text, styled.styles);
+      _controller.addListener(_onTextChanged);
     }
   }
 

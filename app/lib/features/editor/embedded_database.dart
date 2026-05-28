@@ -11,6 +11,7 @@ import '../databases/presentation/database_view.dart';
 import '../databases/presentation/gallery_view.dart';
 import '../databases/presentation/property_ui.dart';
 import '../databases/presentation/table_view.dart';
+import '../files/file_repository.dart';
 import '../pages/data/page_repository.dart';
 import '../pages/domain/page_model.dart';
 import '../sync/sync_provider.dart';
@@ -51,6 +52,16 @@ class EmbeddedDatabase extends ConsumerWidget {
         );
     final databasePage = allPages.where((p) => p.id == databaseId).firstOrNull;
     final pageTitles = <String, String>{for (final p in allPages) p.id: p.title};
+    final pageIcons = <String, String>{
+      for (final p in allPages) p.id: p.icon ?? ''
+    };
+    final pageCovers = <String, String>{
+      for (final p in allPages)
+        if (p.cover != null) p.id: p.cover!
+    };
+    final serverConfig = ref
+        .watch(serverConfigProvider)
+        .maybeWhen(data: (c) => c, orElse: () => null);
 
     void writeConfig(DatabaseBlockConfig next) {
       ref.read(blockRepositoryProvider).updateBlock(blockId, content: next.encode());
@@ -129,6 +140,9 @@ class EmbeddedDatabase extends ConsumerWidget {
                             rows: rows,
                             properties: properties,
                             pageTitles: pageTitles,
+                            pageIcons: pageIcons,
+                            pageCovers: pageCovers,
+                            serverConfig: serverConfig,
                             onRowTap: (row) =>
                                 context.go('/pages/${row.pageId}'),
                           ),

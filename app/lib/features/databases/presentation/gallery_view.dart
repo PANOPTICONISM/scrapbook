@@ -1,6 +1,8 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../files/file_repository.dart';
 import '../domain/database_model.dart';
 import '../domain/database_row_model.dart';
 
@@ -12,12 +14,24 @@ class GalleryView extends StatelessWidget {
   /// the linked page, so editing the row page's title updates the card.
   final Map<String, String> pageTitles;
 
+  /// Optional map of pageId -> page icon (emoji), shown before the title.
+  final Map<String, String> pageIcons;
+
+  /// Optional map of pageId -> cover file id, shown atop the card.
+  final Map<String, String> pageCovers;
+
+  /// Resolved server config, needed to build authenticated cover image URLs.
+  final ServerConfig? serverConfig;
+
   const GalleryView({
     super.key,
     required this.rows,
     required this.properties,
     required this.onRowTap,
     this.pageTitles = const {},
+    this.pageIcons = const {},
+    this.pageCovers = const {},
+    this.serverConfig,
   });
 
   @override
@@ -29,24 +43,32 @@ class GalleryView extends StatelessWidget {
       );
     }
 
-    final crossAxisCount = MediaQuery.of(context).size.width > 900 ? 4 :
-                           MediaQuery.of(context).size.width > 600 ? 3 : 2;
-
-    return GridView.builder(
-      padding: const EdgeInsets.all(16),
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: crossAxisCount,
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 12,
-        childAspectRatio: 1.3,
-      ),
-      itemCount: rows.length,
-      itemBuilder: (context, i) => _GalleryCard(
-        row: rows[i],
-        title: pageTitles[rows[i].pageId] ?? '',
-        properties: properties,
-        onTap: () => onRowTap(rows[i]),
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Size the columns off the actual available width, not the screen — the
+        // gallery often lives inside a narrow column (e.g. embedded in a page).
+        final width = constraints.maxWidth;
+        final crossAxisCount = (width / 180).floor().clamp(1, 6);
+        return GridView.builder(
+          padding: const EdgeInsets.all(16),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossAxisCount,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            childAspectRatio: 1.4,
+          ),
+          itemCount: rows.length,
+          itemBuilder: (context, i) => _GalleryCard(
+            row: rows[i],
+            title: pageTitles[rows[i].pageId] ?? '',
+            icon: pageIcons[rows[i].pageId] ?? '',
+            cover: pageCovers[rows[i].pageId] ?? '',
+            serverConfig: serverConfig,
+            properties: properties,
+            onTap: () => onRowTap(rows[i]),
+          ),
+        );
+      },
     );
   }
 }
@@ -54,12 +76,18 @@ class GalleryView extends StatelessWidget {
 class _GalleryCard extends StatelessWidget {
   final DatabaseRowModel row;
   final String title;
+  final String icon;
+  final String cover;
+  final ServerConfig? serverConfig;
   final List<DatabaseProperty> properties;
   final VoidCallback onTap;
 
   const _GalleryCard({
     required this.row,
     required this.title,
+    required this.icon,
+    required this.cover,
+    required this.serverConfig,
     required this.properties,
     required this.onTap,
   });
@@ -81,35 +109,74 @@ class _GalleryCard extends StatelessWidget {
       chips.add(_PropertyChip(label: val, property: prop));
     }
 
+    final cfg = serverConfig;
+    final showCover = cover.isNotEmpty && cfg != null;
+
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title.isEmpty ? 'Untitled' : title,
-                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (showCover)
               Expanded(
-                child: ClipRect(
-                  child: Align(
-                    alignment: Alignment.bottomLeft,
-                    child: Wrap(
-                      spacing: 4,
-                      runSpacing: 4,
-                      children: chips,
-                    ),
+                flex: 2,
+                child: SizedBox(
+                  width: double.infinity,
+                  child: CachedNetworkImage(
+                    imageUrl: FileRepository.imageUrl(cfg, cover),
+                    cacheKey: cover,
+                    fit: BoxFit.cover,
+                    errorWidget: (_, _, _) => Container(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .surfaceContainerHighest),
                   ),
                 ),
               ),
-            ],
-          ),
+            Expanded(
+              flex: 3,
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (icon.isNotEmpty) ...[
+                          Text(icon, style: const TextStyle(fontSize: 16)),
+                          const SizedBox(width: 6),
+                        ],
+                        Expanded(
+                          child: Text(
+                            title.isEmpty ? 'Untitled' : title,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w600, fontSize: 14),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Expanded(
+                      child: ClipRect(
+                        child: Align(
+                          alignment: Alignment.bottomLeft,
+                          child: Wrap(
+                            spacing: 4,
+                            runSpacing: 4,
+                            children: chips,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
